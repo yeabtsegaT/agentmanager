@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -22,6 +25,7 @@ environment variables using the AGENTMGR_ prefix.`,
 
 	cmd.AddCommand(
 		newConfigShowCommand(cfg),
+		newConfigGetCommand(cfg),
 		newConfigSetCommand(cfg),
 		newConfigPathCommand(cfg),
 		newConfigInitCommand(cfg),
@@ -46,6 +50,41 @@ func newConfigShowCommand(cfg *config.Config) *cobra.Command {
 	}
 }
 
+func newConfigGetCommand(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <key>",
+		Short: "Get a configuration value",
+		Long: `Get a configuration value by key path.
+
+Examples:
+  agentmgr config get ui.theme
+  agentmgr config get updates.auto_check
+  agentmgr config get logging.level`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := args[0]
+
+			// Create a loader to read config
+			loader := config.NewLoader()
+
+			// Load current config
+			_, err := loader.Load("")
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Get the value
+			value := loader.Get(key)
+			if value == nil {
+				return fmt.Errorf("key %q not found in configuration", key)
+			}
+
+			fmt.Printf("%s = %v\n", key, value)
+			return nil
+		},
+	}
+}
+
 func newConfigSetCommand(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
@@ -55,17 +94,86 @@ func newConfigSetCommand(cfg *config.Config) *cobra.Command {
 Examples:
   agentmgr config set ui.theme dark
   agentmgr config set updates.auto_check false
-  agentmgr config set logging.level debug`,
+  agentmgr config set logging.level debug
+  agentmgr config set ui.page_size 50
+  agentmgr config set catalog.refresh_interval 2h`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
-			value := args[1]
+			valueStr := args[1]
 
-			// TODO: Implement actual config set
-			printSuccess("Set %s = %s", key, value)
+			// Create a loader to manage config
+			loader := config.NewLoader()
+
+			// Load current config (this loads the file into viper)
+			_, err := loader.Load("")
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Parse value based on known types for common keys
+			value := parseConfigValue(key, valueStr)
+
+			// Set the value in viper and save
+			if err := loader.SetAndSave(key, value); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			printSuccess("Set %s = %s", key, valueStr)
+			printInfo("Config saved to %s", config.GetConfigPath())
 			return nil
 		},
 	}
+}
+
+// parseConfigValue parses a string value into the appropriate type based on the key.
+func parseConfigValue(key, value string) interface{} {
+	key = strings.ToLower(key)
+
+	// Boolean keys
+	boolKeys := []string{
+		"catalog.refresh_on_start",
+		"updates.auto_check", "updates.notify", "updates.auto_update",
+		"ui.show_hidden", "ui.use_colors", "ui.compact_mode",
+		"api.enable_grpc", "api.enable_rest", "api.require_auth",
+	}
+	for _, k := range boolKeys {
+		if key == k {
+			return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+		}
+	}
+
+	// Integer keys
+	intKeys := []string{
+		"ui.page_size",
+		"api.grpc_port", "api.rest_port",
+		"logging.max_size", "logging.max_age",
+	}
+	for _, k := range intKeys {
+		if key == k {
+			if i, err := strconv.Atoi(value); err == nil {
+				return i
+			}
+			return value
+		}
+	}
+
+	// Duration keys
+	durationKeys := []string{
+		"catalog.refresh_interval",
+		"updates.check_interval",
+	}
+	for _, k := range durationKeys {
+		if key == k {
+			if d, err := time.ParseDuration(value); err == nil {
+				return d
+			}
+			return value
+		}
+	}
+
+	// Default: return as string
+	return value
 }
 
 func newConfigPathCommand(cfg *config.Config) *cobra.Command {

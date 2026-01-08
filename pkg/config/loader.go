@@ -115,6 +115,24 @@ func (l *Loader) Set(key string, value interface{}) {
 	l.v.Set(key, value)
 }
 
+// SetAndSave sets a configuration value and saves the entire config to file.
+func (l *Loader) SetAndSave(key string, value interface{}) error {
+	l.v.Set(key, value)
+
+	// Ensure directory exists
+	dir := filepath.Dir(l.filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Write to file
+	if err := l.v.WriteConfigAs(l.filePath); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
+}
+
 // Get gets a configuration value by key path.
 func (l *Loader) Get(key string) interface{} {
 	return l.v.Get(key)
