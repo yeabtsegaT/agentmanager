@@ -123,6 +123,7 @@ issues:
     - path: _test\.go
       linters:
         - dupl
+        - errcheck    # Test error handling via t.Fatal/t.Error
         - goconst
         - gosec
         - govet       # Allow unused writes in test data setup
