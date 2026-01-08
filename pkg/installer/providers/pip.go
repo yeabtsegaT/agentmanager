@@ -284,6 +284,108 @@ func (p *PipProvider) findExecutable(agentDef catalog.AgentDef) string {
 	return ""
 }
 
+// GetLatestVersion returns the latest version of a pip package from PyPI.
+func (p *PipProvider) GetLatestVersion(ctx context.Context, method catalog.InstallMethodDef) (agent.Version, error) {
+	packageName := method.Package
+	if packageName == "" {
+		packageName = extractPipPackage(method.Command)
+	}
+	if packageName == "" {
+		return agent.Version{}, fmt.Errorf("could not determine package name")
+	}
+
+	methodName := method.Method
+
+	switch methodName {
+	case "pipx":
+		// pipx doesn't have a direct way to check latest version, use pip index
+		return p.getLatestFromPyPI(ctx, packageName)
+
+	case "uv":
+		// Use uv pip index versions
+		cmd := exec.CommandContext(ctx, "uv", "pip", "index", "versions", packageName)
+		output, err := cmd.Output()
+		if err != nil {
+			// Fallback to PyPI
+			return p.getLatestFromPyPI(ctx, packageName)
+		}
+		// Parse output: "packagename (x.y.z)"
+		outputStr := strings.TrimSpace(string(output))
+		if idx := strings.Index(outputStr, "("); idx > 0 {
+			if endIdx := strings.Index(outputStr, ")"); endIdx > idx {
+				versionStr := outputStr[idx+1 : endIdx]
+				version, err := agent.ParseVersion(versionStr)
+				if err != nil {
+					return agent.Version{}, err
+				}
+				return version, nil
+			}
+		}
+		return p.getLatestFromPyPI(ctx, packageName)
+
+	default: // pip
+		// Use pip index versions
+		manager := "pip3"
+		if !p.platform.IsExecutableInPath("pip3") {
+			manager = "pip"
+		}
+		cmd := exec.CommandContext(ctx, manager, "index", "versions", packageName)
+		output, err := cmd.Output()
+		if err != nil {
+			// Fallback to PyPI API
+			return p.getLatestFromPyPI(ctx, packageName)
+		}
+		// Parse output: "packagename (x.y.z)"
+		outputStr := strings.TrimSpace(string(output))
+		if idx := strings.Index(outputStr, "("); idx > 0 {
+			if endIdx := strings.Index(outputStr, ")"); endIdx > idx {
+				versionStr := outputStr[idx+1 : endIdx]
+				version, err := agent.ParseVersion(versionStr)
+				if err != nil {
+					return agent.Version{}, err
+				}
+				return version, nil
+			}
+		}
+		return p.getLatestFromPyPI(ctx, packageName)
+	}
+}
+
+// getLatestFromPyPI fetches the latest version from PyPI JSON API.
+func (p *PipProvider) getLatestFromPyPI(ctx context.Context, packageName string) (agent.Version, error) {
+	// Use curl to fetch from PyPI JSON API
+	url := fmt.Sprintf("https://pypi.org/pypi/%s/json", packageName)
+	cmd := exec.CommandContext(ctx, "curl", "-s", url)
+	output, err := cmd.Output()
+	if err != nil {
+		return agent.Version{}, fmt.Errorf("failed to fetch from PyPI: %w", err)
+	}
+
+	// Simple JSON parsing to extract version
+	// Look for "version": "x.y.z"
+	outputStr := string(output)
+	if idx := strings.Index(outputStr, `"version"`); idx > 0 {
+		rest := outputStr[idx:]
+		if colonIdx := strings.Index(rest, ":"); colonIdx > 0 {
+			rest = rest[colonIdx+1:]
+			rest = strings.TrimSpace(rest)
+			if strings.HasPrefix(rest, `"`) {
+				rest = rest[1:]
+				if endIdx := strings.Index(rest, `"`); endIdx > 0 {
+					versionStr := rest[:endIdx]
+					version, err := agent.ParseVersion(versionStr)
+					if err != nil {
+						return agent.Version{}, err
+					}
+					return version, nil
+				}
+			}
+		}
+	}
+
+	return agent.Version{}, fmt.Errorf("could not parse PyPI response")
+}
+
 // extractPipPackage extracts the package name from a pip install command.
 func extractPipPackage(command string) string {
 	parts := strings.Fields(command)

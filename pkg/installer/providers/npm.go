@@ -181,6 +181,32 @@ func (p *NPMProvider) findExecutable(agentDef catalog.AgentDef) string {
 	return ""
 }
 
+// GetLatestVersion returns the latest version of an npm package from the registry.
+func (p *NPMProvider) GetLatestVersion(ctx context.Context, method catalog.InstallMethodDef) (agent.Version, error) {
+	packageName := method.Package
+	if packageName == "" {
+		packageName = extractNPMPackage(method.Command)
+	}
+	if packageName == "" {
+		return agent.Version{}, fmt.Errorf("could not determine npm package name")
+	}
+
+	// Use npm view to get the latest version
+	cmd := exec.CommandContext(ctx, "npm", "view", packageName, "version")
+	output, err := cmd.Output()
+	if err != nil {
+		return agent.Version{}, fmt.Errorf("npm view failed: %w", err)
+	}
+
+	versionStr := strings.TrimSpace(string(output))
+	version, err := agent.ParseVersion(versionStr)
+	if err != nil {
+		return agent.Version{}, fmt.Errorf("failed to parse version %q: %w", versionStr, err)
+	}
+
+	return version, nil
+}
+
 // extractNPMPackage extracts the package name from an npm install command.
 func extractNPMPackage(command string) string {
 	parts := strings.Fields(command)

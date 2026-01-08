@@ -214,6 +214,59 @@ func (p *BrewProvider) getInstalledVersion(ctx context.Context, packageName stri
 	return version
 }
 
+// GetLatestVersion returns the latest version of a brew package.
+func (p *BrewProvider) GetLatestVersion(ctx context.Context, method catalog.InstallMethodDef) (agent.Version, error) {
+	packageName, isCask := p.parseBrewPackage(method)
+	if packageName == "" {
+		return agent.Version{}, fmt.Errorf("could not determine brew package name")
+	}
+
+	args := []string{"info", "--json=v2"}
+	if isCask {
+		args = append(args, "--cask")
+	}
+	args = append(args, packageName)
+
+	cmd := exec.CommandContext(ctx, "brew", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return agent.Version{}, fmt.Errorf("brew info failed: %w", err)
+	}
+
+	var result struct {
+		Formulae []struct {
+			Versions struct {
+				Stable string `json:"stable"`
+			} `json:"versions"`
+		} `json:"formulae"`
+		Casks []struct {
+			Version string `json:"version"`
+		} `json:"casks"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return agent.Version{}, fmt.Errorf("failed to parse brew info: %w", err)
+	}
+
+	var versionStr string
+	if isCask && len(result.Casks) > 0 {
+		versionStr = result.Casks[0].Version
+	} else if len(result.Formulae) > 0 {
+		versionStr = result.Formulae[0].Versions.Stable
+	}
+
+	if versionStr == "" {
+		return agent.Version{}, fmt.Errorf("no version found for %s", packageName)
+	}
+
+	version, err := agent.ParseVersion(versionStr)
+	if err != nil {
+		return agent.Version{}, err
+	}
+
+	return version, nil
+}
+
 // findExecutable attempts to find the executable for an agent.
 func (p *BrewProvider) findExecutable(agentDef catalog.AgentDef) string {
 	for _, exec := range agentDef.Detection.Executables {

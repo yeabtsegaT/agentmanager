@@ -63,7 +63,7 @@ native installers, etc.) and displays their current version, installation
 method, and update status.`,
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 
 			// Get current platform
@@ -88,11 +88,35 @@ method, and update status.`,
 				return fmt.Errorf("failed to load catalog: %w", err)
 			}
 
+			// Build a map of agent ID -> AgentDef for quick lookup
+			agentDefMap := make(map[string]catalog.AgentDef)
+			for _, def := range agentDefs {
+				agentDefMap[def.ID] = def
+			}
+
 			// Create detector and detect agents
 			det := detector.New(plat)
 			installations, err := det.DetectAll(ctx, agentDefs)
 			if err != nil {
 				return fmt.Errorf("detection failed: %w", err)
+			}
+
+			// Create installer manager for version checking
+			instMgr := installer.NewManager(plat)
+
+			// Check for latest versions (always check, show update indicator)
+			for _, inst := range installations {
+				if agentDef, ok := agentDefMap[inst.AgentID]; ok {
+					// Find the matching install method
+					methodStr := string(inst.Method)
+					if method, ok := agentDef.InstallMethods[methodStr]; ok {
+						// Get latest version from package registry
+						latestVer, err := instMgr.GetLatestVersion(ctx, method)
+						if err == nil {
+							inst.LatestVersion = &latestVer
+						}
+					}
+				}
 			}
 
 			// Apply filters

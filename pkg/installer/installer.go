@@ -172,3 +172,33 @@ func (m *Manager) IsMethodAvailable(method string) bool {
 		return false
 	}
 }
+
+// GetLatestVersion returns the latest version available for an agent using the specified method.
+func (m *Manager) GetLatestVersion(ctx context.Context, method catalog.InstallMethodDef) (agent.Version, error) {
+	switch method.Method {
+	case "npm":
+		if !m.npm.IsAvailable() {
+			return agent.Version{}, fmt.Errorf("npm is not available")
+		}
+		return m.npm.GetLatestVersion(ctx, method)
+
+	case "pip", "pipx", "uv":
+		if !m.pip.IsAvailable() {
+			return agent.Version{}, fmt.Errorf("pip/pipx/uv is not available")
+		}
+		return m.pip.GetLatestVersion(ctx, method)
+
+	case "brew":
+		if !m.brew.IsAvailable() {
+			return agent.Version{}, fmt.Errorf("brew is not available")
+		}
+		return m.brew.GetLatestVersion(ctx, method)
+
+	case "native", "curl", "binary":
+		// Native installs don't have a registry to check
+		return agent.Version{}, fmt.Errorf("version checking not supported for %s", method.Method)
+
+	default:
+		return agent.Version{}, fmt.Errorf("unsupported install method: %s", method.Method)
+	}
+}
