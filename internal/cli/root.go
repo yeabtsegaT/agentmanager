@@ -93,8 +93,11 @@ func printInfo(format string, args ...interface{}) {
 }
 
 // printWarning prints a warning message.
-//
-//nolint:unused // Reserved for future use in command implementations
 func printWarning(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "⚠ "+format+"\n", args...)
+}
+
+// printError prints an error message.
+func printError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "✗ "+format+"\n", args...)
 }

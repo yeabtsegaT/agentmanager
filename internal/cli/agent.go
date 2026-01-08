@@ -254,28 +254,48 @@ When updating, the full changelog is displayed before confirming the update.
 Use --all to update all agents at once.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			plat := platform.Current()
+
+			store, err := storage.NewSQLiteStore(plat.GetDataDir())
+			if err != nil {
+				return fmt.Errorf("failed to create storage: %w", err)
+			}
+			defer store.Close()
+
+			if err := store.Initialize(ctx); err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			catMgr := catalog.NewManager(cfg, store)
+			agentDefs, err := catMgr.GetAgentsForPlatform(ctx, string(plat.ID()))
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
+			det := detector.New(plat)
+			installations, err := det.DetectAll(ctx, agentDefs)
+			if err != nil {
+				return fmt.Errorf("detection failed: %w", err)
+			}
+
+			inst := installer.NewManager(plat)
+			cat, err := catMgr.Get(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
 			if all {
-				fmt.Println("Checking for updates...")
-				// TODO: Implement update all
-				printInfo("No updates available")
-				return nil
+				return updateAllAgents(ctx, installations, cat, inst, dryRun)
 			}
 
 			if len(args) == 0 {
 				return fmt.Errorf("agent name required (or use --all)")
 			}
 
-			agentName := args[0]
-
-			if dryRun {
-				fmt.Printf("Would update %s (dry run)\n", agentName)
-				return nil
-			}
-
-			fmt.Printf("Updating %s...\n", agentName)
-			// TODO: Implement actual update
-			printSuccess("Updated %s successfully", agentName)
-			return nil
+			return updateSingleAgent(ctx, args[0], installations, cat, inst, force, dryRun)
 		},
 	}
 
@@ -284,6 +304,135 @@ Use --all to update all agents at once.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be updated")
 
 	return cmd
+}
+
+// updateAllAgents handles the --all flag to update all agents with available updates.
+func updateAllAgents(ctx context.Context, installations []*agent.Installation, cat *catalog.Catalog, inst *installer.Manager, dryRun bool) error {
+	fmt.Println("Checking for updates...")
+
+	var toUpdate []*agent.Installation
+	for _, installation := range installations {
+		if installation.HasUpdate() {
+			toUpdate = append(toUpdate, installation)
+		}
+	}
+
+	if len(toUpdate) == 0 {
+		printInfo("No updates available")
+		return nil
+	}
+
+	fmt.Printf("Found %d agent(s) with updates:\n", len(toUpdate))
+	for _, installation := range toUpdate {
+		latestVer := "unknown"
+		if installation.LatestVersion != nil {
+			latestVer = installation.LatestVersion.String()
+		}
+		fmt.Printf("  - %s: %s -> %s\n",
+			installation.AgentName,
+			installation.InstalledVersion.String(),
+			latestVer)
+	}
+
+	if dryRun {
+		printInfo("Dry run - no changes made")
+		return nil
+	}
+
+	for _, installation := range toUpdate {
+		agentDef, ok := cat.GetAgent(installation.AgentID)
+		if !ok {
+			printWarning("Skipping %s: not found in catalog", installation.AgentName)
+			continue
+		}
+
+		methodDef, ok := agentDef.GetInstallMethod(string(installation.Method))
+		if !ok {
+			printWarning("Skipping %s: install method %s not found", installation.AgentName, installation.Method)
+			continue
+		}
+
+		fmt.Printf("Updating %s via %s...\n", installation.AgentName, installation.Method)
+		result, err := inst.Update(ctx, installation, agentDef, methodDef)
+		if err != nil {
+			printError("Failed to update %s: %v", installation.AgentName, err)
+			continue
+		}
+		printSuccess("Updated %s to %s", installation.AgentName, result.Version.String())
+	}
+
+	return nil
+}
+
+// updateSingleAgent handles updating a specific agent by ID.
+func updateSingleAgent(ctx context.Context, agentID string, installations []*agent.Installation, cat *catalog.Catalog, inst *installer.Manager, force, dryRun bool) error {
+	var agentInstallations []*agent.Installation
+	for _, installation := range installations {
+		if installation.AgentID == agentID {
+			agentInstallations = append(agentInstallations, installation)
+		}
+	}
+
+	if len(agentInstallations) == 0 {
+		return fmt.Errorf("agent %q not installed", agentID)
+	}
+
+	agentDef, ok := cat.GetAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found in catalog", agentID)
+	}
+
+	var hasUpdate bool
+	for _, installation := range agentInstallations {
+		if installation.HasUpdate() || force {
+			hasUpdate = true
+			break
+		}
+	}
+
+	if !hasUpdate {
+		printInfo("%s is already up to date", agentDef.Name)
+		return nil
+	}
+
+	if dryRun {
+		fmt.Printf("Would update %s (dry run)\n", agentDef.Name)
+		for _, installation := range agentInstallations {
+			if installation.HasUpdate() || force {
+				latestVer := "latest"
+				if installation.LatestVersion != nil {
+					latestVer = installation.LatestVersion.String()
+				}
+				fmt.Printf("  - %s via %s: %s -> %s\n",
+					installation.AgentName,
+					installation.Method,
+					installation.InstalledVersion.String(),
+					latestVer)
+			}
+		}
+		return nil
+	}
+
+	for _, installation := range agentInstallations {
+		if !installation.HasUpdate() && !force {
+			continue
+		}
+
+		methodDef, ok := agentDef.GetInstallMethod(string(installation.Method))
+		if !ok {
+			printWarning("Skipping %s via %s: method not in catalog", installation.AgentName, installation.Method)
+			continue
+		}
+
+		fmt.Printf("Updating %s via %s...\n", installation.AgentName, installation.Method)
+		result, err := inst.Update(ctx, installation, agentDef, methodDef)
+		if err != nil {
+			return fmt.Errorf("update failed: %w", err)
+		}
+		printSuccess("Updated %s to %s", agentDef.Name, result.Version.String())
+	}
+
+	return nil
 }
 
 func newAgentInfoCommand(cfg *config.Config) *cobra.Command {
@@ -296,18 +445,154 @@ func newAgentInfoCommand(cfg *config.Config) *cobra.Command {
 version information, changelog for available updates, and configuration.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentName := args[0]
+			agentID := args[0]
 
-			// TODO: Implement actual info display
-			fmt.Printf("Agent: %s\n", agentName)
-			fmt.Println("Status: Not implemented yet")
-			return nil
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Get current platform
+			plat := platform.Current()
+
+			// Load catalog and storage
+			store, err := storage.NewSQLiteStore(plat.GetDataDir())
+			if err != nil {
+				return fmt.Errorf("failed to create storage: %w", err)
+			}
+			defer store.Close()
+
+			if err := store.Initialize(ctx); err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			catMgr := catalog.NewManager(cfg, store)
+			cat, err := catMgr.Get(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
+			// Get agent from catalog
+			agentDef, ok := cat.GetAgent(agentID)
+			if !ok {
+				return fmt.Errorf("agent %q not found in catalog", agentID)
+			}
+
+			// Detect installations of this agent
+			agentDefs, err := catMgr.GetAgentsForPlatform(ctx, string(plat.ID()))
+			if err != nil {
+				return fmt.Errorf("failed to get agents: %w", err)
+			}
+			det := detector.New(plat)
+			allInstallations, err := det.DetectAll(ctx, agentDefs)
+			if err != nil {
+				return fmt.Errorf("detection failed: %w", err)
+			}
+
+			// Filter for this agent
+			var installations []*agent.Installation
+			for _, inst := range allInstallations {
+				if inst.AgentID == agentID {
+					installations = append(installations, inst)
+				}
+			}
+
+			if format == "json" {
+				return outputAgentInfoJSON(agentDef, installations)
+			}
+
+			return outputAgentInfoText(agentDef, installations, plat)
 		},
 	}
 
 	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format (text, json)")
 
 	return cmd
+}
+
+func outputAgentInfoText(agentDef catalog.AgentDef, installations []*agent.Installation, plat platform.Platform) error {
+	fmt.Printf("Agent: %s\n", agentDef.Name)
+	fmt.Printf("ID: %s\n", agentDef.ID)
+	fmt.Printf("Description: %s\n", agentDef.Description)
+	if agentDef.Homepage != "" {
+		fmt.Printf("Homepage: %s\n", agentDef.Homepage)
+	}
+	if agentDef.Repository != "" {
+		fmt.Printf("Repository: %s\n", agentDef.Repository)
+	}
+
+	// Installation methods
+	methods := agentDef.GetSupportedMethods(string(plat.ID()))
+	if len(methods) > 0 {
+		fmt.Printf("\nInstallation Methods:\n")
+		for _, m := range methods {
+			fmt.Printf("  - %s: %s\n", m.Method, m.Command)
+		}
+	}
+
+	// Installed versions
+	if len(installations) > 0 {
+		fmt.Printf("\nInstalled (%d):\n", len(installations))
+		for _, inst := range installations {
+			status := "up-to-date"
+			if inst.HasUpdate() {
+				status = fmt.Sprintf("update available: %s", inst.LatestVersion.String())
+			}
+			fmt.Printf("  - %s via %s: %s (%s)\n",
+				inst.InstalledVersion.String(),
+				inst.Method,
+				inst.ExecutablePath,
+				status,
+			)
+		}
+	} else {
+		fmt.Printf("\nNot installed\n")
+	}
+
+	return nil
+}
+
+func outputAgentInfoJSON(agentDef catalog.AgentDef, installations []*agent.Installation) error {
+	type installationInfo struct {
+		Version   string `json:"version"`
+		Method    string `json:"method"`
+		Path      string `json:"path"`
+		HasUpdate bool   `json:"has_update"`
+		LatestVer string `json:"latest_version,omitempty"`
+	}
+
+	type agentInfo struct {
+		ID            string             `json:"id"`
+		Name          string             `json:"name"`
+		Description   string             `json:"description"`
+		Homepage      string             `json:"homepage,omitempty"`
+		Repository    string             `json:"repository,omitempty"`
+		Installations []installationInfo `json:"installations"`
+	}
+
+	info := agentInfo{
+		ID:          agentDef.ID,
+		Name:        agentDef.Name,
+		Description: agentDef.Description,
+		Homepage:    agentDef.Homepage,
+		Repository:  agentDef.Repository,
+	}
+
+	for _, inst := range installations {
+		latestVer := ""
+		if inst.LatestVersion != nil {
+			latestVer = inst.LatestVersion.String()
+		}
+		info.Installations = append(info.Installations, installationInfo{
+			Version:   inst.InstalledVersion.String(),
+			Method:    string(inst.Method),
+			Path:      inst.ExecutablePath,
+			HasUpdate: inst.HasUpdate(),
+			LatestVer: latestVer,
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(info)
 }
 
 func newAgentRemoveCommand(cfg *config.Config) *cobra.Command {
@@ -324,10 +609,89 @@ Use --method to specify which installation to remove if multiple exist.`,
 		Aliases: []string{"rm", "uninstall"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentName := args[0]
+			agentID := args[0]
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			// Get current platform
+			plat := platform.Current()
+
+			// Load catalog and storage
+			store, err := storage.NewSQLiteStore(plat.GetDataDir())
+			if err != nil {
+				return fmt.Errorf("failed to create storage: %w", err)
+			}
+			defer store.Close()
+
+			if err := store.Initialize(ctx); err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			catMgr := catalog.NewManager(cfg, store)
+
+			// Get agents for current platform
+			agentDefs, err := catMgr.GetAgentsForPlatform(ctx, string(plat.ID()))
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
+			// Detect current installations
+			det := detector.New(plat)
+			installations, err := det.DetectAll(ctx, agentDefs)
+			if err != nil {
+				return fmt.Errorf("detection failed: %w", err)
+			}
+
+			// Get catalog for looking up agent definitions
+			cat, err := catMgr.Get(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
+			// Find installations for this agent
+			var agentInstallations []*agent.Installation
+			for _, installation := range installations {
+				if installation.AgentID == agentID {
+					// Filter by method if specified
+					if method != "" && string(installation.Method) != method {
+						continue
+					}
+					agentInstallations = append(agentInstallations, installation)
+				}
+			}
+
+			if len(agentInstallations) == 0 {
+				if method != "" {
+					return fmt.Errorf("agent %q not installed via %s", agentID, method)
+				}
+				return fmt.Errorf("agent %q not installed", agentID)
+			}
+
+			// Get agent definition
+			agentDef, ok := cat.GetAgent(agentID)
+			if !ok {
+				return fmt.Errorf("agent %q not found in catalog", agentID)
+			}
+
+			// If multiple installations and no method specified, list them
+			if len(agentInstallations) > 1 && method == "" {
+				fmt.Printf("Multiple installations of %s found:\n", agentDef.Name)
+				for _, installation := range agentInstallations {
+					fmt.Printf("  - %s via %s (%s)\n",
+						installation.InstalledVersion.String(),
+						installation.Method,
+						installation.ExecutablePath)
+				}
+				fmt.Println("\nUse --method to specify which installation to remove.")
+				return nil
+			}
+
+			installation := agentInstallations[0]
 
 			if !force {
-				fmt.Printf("Are you sure you want to remove %s? [y/N] ", agentName)
+				fmt.Printf("Are you sure you want to remove %s (%s via %s)? [y/N] ",
+					agentDef.Name, installation.InstalledVersion.String(), installation.Method)
 				var response string
 				fmt.Scanln(&response)
 				if !strings.EqualFold(response, "y") {
@@ -336,9 +700,21 @@ Use --method to specify which installation to remove if multiple exist.`,
 				}
 			}
 
-			fmt.Printf("Removing %s...\n", agentName)
-			// TODO: Implement actual removal
-			printSuccess("Removed %s successfully", agentName)
+			// Get the install method definition
+			methodDef, ok := agentDef.GetInstallMethod(string(installation.Method))
+			if !ok {
+				return fmt.Errorf("install method %s not found in catalog for %s", installation.Method, agentID)
+			}
+
+			// Create installer and uninstall
+			inst := installer.NewManager(plat)
+			fmt.Printf("Removing %s via %s...\n", agentDef.Name, installation.Method)
+
+			if err := inst.Uninstall(ctx, installation, methodDef); err != nil {
+				return fmt.Errorf("removal failed: %w", err)
+			}
+
+			printSuccess("Removed %s successfully", agentDef.Name)
 			return nil
 		},
 	}

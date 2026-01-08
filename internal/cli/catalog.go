@@ -125,9 +125,38 @@ in configuration.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("Refreshing catalog from GitHub...")
 
-			// TODO: Implement actual catalog refresh
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			// Get current platform
+			plat := platform.Current()
+
+			// Load storage
+			store, err := storage.NewSQLiteStore(plat.GetDataDir())
+			if err != nil {
+				return fmt.Errorf("failed to create storage: %w", err)
+			}
+			defer store.Close()
+
+			if err := store.Initialize(ctx); err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			catMgr := catalog.NewManager(cfg, store)
+
+			// Refresh catalog from remote
+			if err := catMgr.Refresh(ctx); err != nil {
+				return fmt.Errorf("failed to refresh catalog: %w", err)
+			}
+
+			// Get refreshed catalog to show stats
+			cat, err := catMgr.Get(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get catalog: %w", err)
+			}
+
 			printSuccess("Catalog refreshed successfully")
-			printInfo("9 agents available")
+			printInfo("%d agents available (version %s)", len(cat.Agents), cat.Version)
 			return nil
 		},
 	}
@@ -220,14 +249,79 @@ installation methods, detection signatures, and changelog sources.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
 
-			// TODO: Load actual catalog and show agent
-			fmt.Printf("Agent ID: %s\n", agentID)
-			fmt.Println("\nNot implemented yet.")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Get current platform
+			plat := platform.Current()
+
+			// Load catalog
+			store, err := storage.NewSQLiteStore(plat.GetDataDir())
+			if err != nil {
+				return fmt.Errorf("failed to create storage: %w", err)
+			}
+			defer store.Close()
+
+			if err := store.Initialize(ctx); err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			catMgr := catalog.NewManager(cfg, store)
+			cat, err := catMgr.Get(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to load catalog: %w", err)
+			}
+
+			// Get agent from catalog
+			agentDef, ok := cat.GetAgent(agentID)
+			if !ok {
+				return fmt.Errorf("agent %q not found in catalog", agentID)
+			}
+
+			if format == "json" {
+				encoder := json.NewEncoder(os.Stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(agentDef)
+			}
+
+			// Text output
+			fmt.Printf("Agent: %s\n", agentDef.Name)
+			fmt.Printf("ID: %s\n", agentDef.ID)
+			fmt.Printf("Description: %s\n", agentDef.Description)
+			if agentDef.Homepage != "" {
+				fmt.Printf("Homepage: %s\n", agentDef.Homepage)
+			}
+			if agentDef.Repository != "" {
+				fmt.Printf("Repository: %s\n", agentDef.Repository)
+			}
+
+			// Installation methods
+			fmt.Printf("\nInstallation Methods:\n")
+			for _, m := range agentDef.InstallMethods {
+				platforms := "all"
+				if len(m.Platforms) > 0 {
+					platforms = fmt.Sprintf("%v", m.Platforms)
+				}
+				fmt.Printf("  %s:\n", m.Method)
+				fmt.Printf("    Command: %s\n", m.Command)
+				if m.Package != "" {
+					fmt.Printf("    Package: %s\n", m.Package)
+				}
+				fmt.Printf("    Platforms: %s\n", platforms)
+			}
+
+			// Detection info
+			if agentDef.Detection.VersionCmd != "" {
+				fmt.Printf("\nDetection:\n")
+				fmt.Printf("  Executables: %v\n", agentDef.Detection.Executables)
+				fmt.Printf("  Version Command: %s\n", agentDef.Detection.VersionCmd)
+			}
+
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format (text, json, yaml)")
+	cmd.Flags().StringVarP(&format, "format", "f", "text", "output format (text, json)")
 
 	return cmd
 }
