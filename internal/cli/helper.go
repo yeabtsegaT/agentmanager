@@ -1,11 +1,18 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kevinelliott/agentmgr/pkg/config"
+	"github.com/kevinelliott/agentmgr/pkg/ipc"
+	"github.com/kevinelliott/agentmgr/pkg/platform"
 )
 
 // NewHelperCommand creates the helper management command group.
@@ -42,15 +49,44 @@ func newHelperStartCommand(cfg *config.Config) *cobra.Command {
 The helper will appear in your system tray and provide quick access
 to agent status and updates.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if foreground {
-				fmt.Println("Starting helper in foreground...")
-				// TODO: Implement actual helper start in foreground
+			// Check if already running
+			if isHelperRunning() {
+				printInfo("Helper is already running")
 				return nil
 			}
 
+			// Find the helper binary
+			helperPath, err := findHelperBinary()
+			if err != nil {
+				return fmt.Errorf("could not find helper binary: %w", err)
+			}
+
+			if foreground {
+				fmt.Println("Starting helper in foreground...")
+				c := exec.Command(helperPath)
+				c.Stdout = os.Stdout
+				c.Stderr = os.Stderr
+				return c.Run()
+			}
+
 			fmt.Println("Starting helper in background...")
-			// TODO: Implement actual helper start
-			printSuccess("Helper started")
+
+			// Start helper as background process
+			c := exec.Command(helperPath)
+			c.Stdout = nil
+			c.Stderr = nil
+			c.Stdin = nil
+
+			if err := c.Start(); err != nil {
+				return fmt.Errorf("failed to start helper: %w", err)
+			}
+
+			// Detach from parent
+			if err := c.Process.Release(); err != nil {
+				return fmt.Errorf("failed to detach helper: %w", err)
+			}
+
+			printSuccess("Helper started (PID: %d)", c.Process.Pid)
 			return nil
 		},
 	}
@@ -66,8 +102,34 @@ func newHelperStopCommand(cfg *config.Config) *cobra.Command {
 		Short: "Stop the systray helper",
 		Long:  `Stop the running AgentManager systray helper process.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !isHelperRunning() {
+				printInfo("Helper is not running")
+				return nil
+			}
+
 			fmt.Println("Stopping helper...")
-			// TODO: Implement actual helper stop
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Try to send shutdown message via IPC
+			client := ipc.NewClient("")
+			if err := client.Connect(ctx); err != nil {
+				return fmt.Errorf("failed to connect to helper: %w", err)
+			}
+			defer func() { _ = client.Disconnect() }()
+
+			msg, err := ipc.NewMessage(ipc.MessageTypeShutdown, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create shutdown message: %w", err)
+			}
+
+			_, err = client.Send(ctx, msg)
+			if err != nil {
+				// It's okay if we don't get a response - helper may shutdown before responding
+				printWarning("Helper may have shutdown before acknowledging: %v", err)
+			}
+
 			printSuccess("Helper stopped")
 			return nil
 		},
@@ -80,10 +142,54 @@ func newHelperStatusCommand(cfg *config.Config) *cobra.Command {
 		Short: "Check helper status",
 		Long:  `Display the current status of the systray helper.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement actual status check
+			plat := platform.Current()
+
 			fmt.Println("Helper Status:")
-			fmt.Println("  Running: no")
-			fmt.Println("  Auto-start: disabled")
+
+			// Check if running
+			running := isHelperRunning()
+			if running {
+				fmt.Println("  Running: yes")
+
+				// Try to get detailed status via IPC
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				client := ipc.NewClient("")
+				if err := client.Connect(ctx); err == nil {
+					defer func() { _ = client.Disconnect() }()
+
+					msg, err := ipc.NewMessage(ipc.MessageTypeGetStatus, nil)
+					if err != nil {
+						return nil
+					}
+					resp, err := client.Send(ctx, msg)
+					if err == nil && resp != nil {
+						var status ipc.StatusResponse
+						if err := resp.DecodePayload(&status); err == nil {
+							fmt.Printf("  Uptime: %s\n", formatDuration(time.Duration(status.Uptime)*time.Second))
+							fmt.Printf("  Agents: %d\n", status.AgentCount)
+							fmt.Printf("  Updates available: %d\n", status.UpdatesAvailable)
+							if !status.LastCatalogRefresh.IsZero() {
+								fmt.Printf("  Last catalog refresh: %s\n", status.LastCatalogRefresh.Format(time.RFC3339))
+							}
+						}
+					}
+				}
+			} else {
+				fmt.Println("  Running: no")
+			}
+
+			// Check auto-start
+			autoStart, err := plat.IsAutoStartEnabled(context.Background())
+			if err != nil {
+				fmt.Println("  Auto-start: unknown")
+			} else if autoStart {
+				fmt.Println("  Auto-start: enabled")
+			} else {
+				fmt.Println("  Auto-start: disabled")
+			}
+
 			return nil
 		},
 	}
@@ -101,7 +207,15 @@ func newHelperAutoStartCommand(cfg *config.Config) *cobra.Command {
 			Use:   "enable",
 			Short: "Enable auto-start",
 			RunE: func(cmd *cobra.Command, args []string) error {
-				// TODO: Implement using platform.EnableAutoStart
+				plat := platform.Current()
+
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				if err := plat.EnableAutoStart(ctx); err != nil {
+					return fmt.Errorf("failed to enable auto-start: %w", err)
+				}
+
 				printSuccess("Auto-start enabled")
 				return nil
 			},
@@ -110,7 +224,15 @@ func newHelperAutoStartCommand(cfg *config.Config) *cobra.Command {
 			Use:   "disable",
 			Short: "Disable auto-start",
 			RunE: func(cmd *cobra.Command, args []string) error {
-				// TODO: Implement using platform.DisableAutoStart
+				plat := platform.Current()
+
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				if err := plat.DisableAutoStart(ctx); err != nil {
+					return fmt.Errorf("failed to disable auto-start: %w", err)
+				}
+
 				printSuccess("Auto-start disabled")
 				return nil
 			},
@@ -118,4 +240,74 @@ func newHelperAutoStartCommand(cfg *config.Config) *cobra.Command {
 	)
 
 	return cmd
+}
+
+// isHelperRunning checks if the helper process is running by attempting to connect via IPC.
+func isHelperRunning() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := ipc.NewClient("")
+	if err := client.Connect(ctx); err != nil {
+		return false
+	}
+	_ = client.Disconnect()
+	return true
+}
+
+// findHelperBinary locates the agentmgr-helper binary.
+func findHelperBinary() (string, error) {
+	// First, check in the same directory as the current executable
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		helperPath := filepath.Join(dir, "agentmgr-helper")
+		if _, err := os.Stat(helperPath); err == nil {
+			return helperPath, nil
+		}
+	}
+
+	// Check common paths
+	paths := []string{
+		"/usr/local/bin/agentmgr-helper",
+		"/usr/bin/agentmgr-helper",
+	}
+
+	// Add home directory paths
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths,
+			filepath.Join(home, ".local", "bin", "agentmgr-helper"),
+			filepath.Join(home, "go", "bin", "agentmgr-helper"),
+		)
+	}
+
+	// Check PATH
+	if path, err := exec.LookPath("agentmgr-helper"); err == nil {
+		return path, nil
+	}
+
+	// Check each path
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("agentmgr-helper not found in PATH or common locations")
+}
+
+// formatDuration formats a duration in a human-readable way.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	return fmt.Sprintf("%dd %dh", days, hours)
 }

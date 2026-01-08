@@ -2,8 +2,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -15,7 +17,9 @@ import (
 	"github.com/kevinelliott/agentmgr/pkg/agent"
 	"github.com/kevinelliott/agentmgr/pkg/catalog"
 	"github.com/kevinelliott/agentmgr/pkg/config"
+	"github.com/kevinelliott/agentmgr/pkg/detector"
 	"github.com/kevinelliott/agentmgr/pkg/platform"
+	"github.com/kevinelliott/agentmgr/pkg/storage"
 )
 
 // View represents the current view in the TUI.
@@ -166,13 +170,45 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-// loadData loads initial data.
+// loadData loads initial data from storage and detector.
 func (m Model) loadData() tea.Msg {
-	// This would normally load from storage/detector
-	// For now, return empty data
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Initialize storage
+	store, err := storage.NewSQLiteStore(m.platform.GetDataDir())
+	if err != nil {
+		return dataLoadedMsg{err: fmt.Errorf("failed to create storage: %w", err)}
+	}
+	defer store.Close()
+
+	if err := store.Initialize(ctx); err != nil {
+		return dataLoadedMsg{err: fmt.Errorf("failed to initialize storage: %w", err)}
+	}
+
+	// Load catalog
+	catMgr := catalog.NewManager(m.config, store)
+	cat, err := catMgr.Get(ctx)
+	if err != nil {
+		return dataLoadedMsg{err: fmt.Errorf("failed to load catalog: %w", err)}
+	}
+
+	// Get agents for current platform
+	agentDefs, err := catMgr.GetAgentsForPlatform(ctx, string(m.platform.ID()))
+	if err != nil {
+		return dataLoadedMsg{err: fmt.Errorf("failed to get agents for platform: %w", err)}
+	}
+
+	// Detect installed agents
+	det := detector.New(m.platform)
+	installations, err := det.DetectAll(ctx, agentDefs)
+	if err != nil {
+		return dataLoadedMsg{err: fmt.Errorf("detection failed: %w", err)}
+	}
+
 	return dataLoadedMsg{
-		agents:  []*agent.Installation{},
-		catalog: nil,
+		agents:  installations,
+		catalog: cat,
 	}
 }
 
@@ -451,7 +487,64 @@ func (m Model) agentDetailView() string {
 
 // catalogView renders the catalog browser.
 func (m Model) catalogView() string {
-	return styles.InfoMessage.Render("\n  Catalog browser coming soon...\n")
+	if m.loading {
+		return fmt.Sprintf("\n  %s Loading catalog...\n", m.spinner.View())
+	}
+
+	if m.catalog == nil {
+		return styles.InfoMessage.Render("\n  Catalog not loaded. Press 'r' to refresh.\n")
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(styles.Title.Render("  Available Agents"))
+	b.WriteString("\n\n")
+
+	// Get agents for current platform
+	agents := m.catalog.GetAgentsByPlatform(string(m.platform.ID()))
+
+	if len(agents) == 0 {
+		b.WriteString(styles.InfoMessage.Render("  No agents available for this platform.\n"))
+		return b.String()
+	}
+
+	// Build a simple table of agents
+	for _, agentDef := range agents {
+		// Check if installed
+		installed := false
+		for _, inst := range m.agents {
+			if inst.AgentID == agentDef.ID {
+				installed = true
+				break
+			}
+		}
+
+		status := styles.StatusNotInstalled.Render("Not installed")
+		if installed {
+			status = styles.StatusInstalled.Render("Installed")
+		}
+
+		methods := agentDef.GetSupportedMethods(string(m.platform.ID()))
+		methodStr := ""
+		if len(methods) > 0 {
+			methodStr = methods[0].Method
+			if len(methods) > 1 {
+				methodStr += fmt.Sprintf(" +%d", len(methods)-1)
+			}
+		}
+
+		line := fmt.Sprintf("  %s  %s  %s  %s\n",
+			styles.Badge.Render(fmt.Sprintf("%-12s", agentDef.ID)),
+			styles.Version.Render(fmt.Sprintf("%-20s", agentDef.Name)),
+			styles.Help.Render(fmt.Sprintf("%-10s", methodStr)),
+			status,
+		)
+		b.WriteString(line)
+	}
+
+	b.WriteString(fmt.Sprintf("\n  %d agents available\n", len(agents)))
+
+	return b.String()
 }
 
 // settingsView renders settings.

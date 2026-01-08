@@ -166,11 +166,11 @@ issues:
       linters:
         - errcheck
 
-    # CLI has some intentional ignores (user prompts, etc.)
+    # CLI has some intentional ignores (user prompts, IPC disconnect, etc.)
     - path: internal/cli/
       linters:
         - errcheck
-      text: "Scanln|Encode"
+      text: "Scanln|Encode|Disconnect"
 
     # Systray has async patterns where errors are logged separately
     - path: internal/systray/
