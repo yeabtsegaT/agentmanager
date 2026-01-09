@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -71,25 +72,41 @@ to agent status and updates.`,
 
 			fmt.Println("Starting helper in background...")
 
-			// Start helper as background process
-			c := exec.Command(helperPath)
-			c.Stdout = nil
-			c.Stderr = nil
-			c.Stdin = nil
+			// Check if this is a macOS .app bundle
+			isAppBundle := strings.HasSuffix(helperPath, ".app")
+
+			var c *exec.Cmd
+			if isAppBundle {
+				// Use 'open' command for .app bundles on macOS
+				c = exec.Command("open", helperPath)
+			} else {
+				// Start helper as background process
+				c = exec.Command(helperPath)
+				c.Stdout = nil
+				c.Stderr = nil
+				c.Stdin = nil
+			}
 
 			if err := c.Start(); err != nil {
 				return fmt.Errorf("failed to start helper: %w", err)
 			}
 
-			// Save PID before releasing (Release invalidates the Process)
-			pid := c.Process.Pid
+			if isAppBundle {
+				// For .app bundles, 'open' returns immediately
+				// Wait briefly for it to complete
+				_ = c.Wait()
+				printSuccess("Helper started")
+			} else {
+				// Save PID before releasing (Release invalidates the Process)
+				pid := c.Process.Pid
 
-			// Detach from parent
-			if err := c.Process.Release(); err != nil {
-				return fmt.Errorf("failed to detach helper: %w", err)
+				// Detach from parent
+				if err := c.Process.Release(); err != nil {
+					return fmt.Errorf("failed to detach helper: %w", err)
+				}
+
+				printSuccess("Helper started (PID: %d)", pid)
 			}
-
-			printSuccess("Helper started (PID: %d)", pid)
 			return nil
 		},
 	}
@@ -159,22 +176,30 @@ func newHelperStatusCommand(cfg *config.Config) *cobra.Command {
 				defer cancel()
 
 				client := ipc.NewClient("")
-				if err := client.Connect(ctx); err == nil {
+				if err := client.Connect(ctx); err != nil {
+					fmt.Printf("  (IPC connect error: %v)\n", err)
+				} else {
 					defer func() { _ = client.Disconnect() }()
 
 					msg, err := ipc.NewMessage(ipc.MessageTypeGetStatus, nil)
 					if err != nil {
-						return nil
-					}
-					resp, err := client.Send(ctx, msg)
-					if err == nil && resp != nil {
-						var status ipc.StatusResponse
-						if err := resp.DecodePayload(&status); err == nil {
-							fmt.Printf("  Uptime: %s\n", formatDuration(time.Duration(status.Uptime)*time.Second))
-							fmt.Printf("  Agents: %d\n", status.AgentCount)
-							fmt.Printf("  Updates available: %d\n", status.UpdatesAvailable)
-							if !status.LastCatalogRefresh.IsZero() {
-								fmt.Printf("  Last catalog refresh: %s\n", status.LastCatalogRefresh.Format(time.RFC3339))
+						fmt.Printf("  (IPC message error: %v)\n", err)
+					} else {
+						resp, err := client.Send(ctx, msg)
+						if err != nil {
+							fmt.Printf("  (IPC send error: %v)\n", err)
+						} else if resp != nil {
+							var status ipc.StatusResponse
+							if err := resp.DecodePayload(&status); err != nil {
+								fmt.Printf("  (IPC decode error: %v)\n", err)
+							} else {
+								fmt.Printf("  PID: %d\n", status.PID)
+								fmt.Printf("  Uptime: %s\n", formatDuration(time.Duration(status.Uptime)*time.Second))
+								fmt.Printf("  Agents: %d\n", status.AgentCount)
+								fmt.Printf("  Updates available: %d\n", status.UpdatesAvailable)
+								if !status.LastCatalogRefresh.IsZero() {
+									fmt.Printf("  Last catalog refresh: %s\n", status.LastCatalogRefresh.Format(time.RFC3339))
+								}
 							}
 						}
 					}
@@ -258,12 +283,25 @@ func isHelperRunning() bool {
 	return true
 }
 
-// findHelperBinary locates the agentmgr-helper binary.
+// findHelperBinary locates the agentmgr-helper binary or .app bundle.
+// On macOS, it prefers the .app bundle for proper systray support.
 func findHelperBinary() (string, error) {
+	plat := platform.Current()
+	isMacOS := plat.ID() == platform.Darwin
+
 	// First, check in the same directory as the current executable
 	exe, err := os.Executable()
 	if err == nil {
 		dir := filepath.Dir(exe)
+
+		// On macOS, prefer .app bundle
+		if isMacOS {
+			appPath := filepath.Join(dir, "AgentManager Helper.app")
+			if _, err := os.Stat(appPath); err == nil {
+				return appPath, nil
+			}
+		}
+
 		helperPath := filepath.Join(dir, "agentmgr-helper")
 		if _, err := os.Stat(helperPath); err == nil {
 			return helperPath, nil
@@ -271,22 +309,32 @@ func findHelperBinary() (string, error) {
 	}
 
 	// Check common paths
-	paths := []string{
+	var paths []string
+
+	if isMacOS {
+		// Check for .app bundle in Applications and common locations
+		paths = append(paths,
+			"/Applications/AgentManager Helper.app",
+			filepath.Join(os.Getenv("HOME"), "Applications", "AgentManager Helper.app"),
+		)
+	}
+
+	paths = append(paths,
 		"/usr/local/bin/agentmgr-helper",
 		"/usr/bin/agentmgr-helper",
-	}
+	)
 
 	// Add home directory paths
 	if home, err := os.UserHomeDir(); err == nil {
+		if isMacOS {
+			paths = append(paths,
+				filepath.Join(home, ".local", "bin", "AgentManager Helper.app"),
+			)
+		}
 		paths = append(paths,
 			filepath.Join(home, ".local", "bin", "agentmgr-helper"),
 			filepath.Join(home, "go", "bin", "agentmgr-helper"),
 		)
-	}
-
-	// Check PATH
-	if path, err := exec.LookPath("agentmgr-helper"); err == nil {
-		return path, nil
 	}
 
 	// Check each path
@@ -294,6 +342,11 @@ func findHelperBinary() (string, error) {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
+	}
+
+	// Check PATH for bare binary
+	if path, err := exec.LookPath("agentmgr-helper"); err == nil {
+		return path, nil
 	}
 
 	return "", fmt.Errorf("agentmgr-helper not found in PATH or common locations")

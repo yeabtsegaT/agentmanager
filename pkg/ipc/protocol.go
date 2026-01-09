@@ -131,6 +131,7 @@ type UpdateAgentResponse struct {
 // StatusResponse is the payload for get_status responses.
 type StatusResponse struct {
 	Running            bool      `json:"running"`
+	PID                int       `json:"pid"`
 	Uptime             int64     `json:"uptime_seconds"`
 	AgentCount         int       `json:"agent_count"`
 	UpdatesAvailable   int       `json:"updates_available"`

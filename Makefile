@@ -1,6 +1,6 @@
 # AgentManager Makefile
 
-.PHONY: all build build-cli build-helper clean test test-verbose test-pkg test-unit test-coverage test-coverage-summary test-short test-integration benchmark lint install fmt vet deps
+.PHONY: all build build-cli build-helper build-macos-app clean test test-verbose test-pkg test-unit test-coverage test-coverage-summary test-short test-integration benchmark lint install fmt vet deps
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -31,6 +31,11 @@ build-cli:
 build-helper:
 	@echo "Building agentmgr-helper..."
 	go build $(LDFLAGS) -o bin/agentmgr-helper ./cmd/agentmgr-helper
+
+# Build macOS app bundle for helper (systray support)
+build-macos-app: build-helper
+	@echo "Building macOS app bundle..."
+	@./scripts/build-macos-app.sh "$(VERSION)" "$(COMMIT)" "$(DATE)"
 
 # Build for all platforms
 build-all:
@@ -138,6 +143,7 @@ help:
 	@echo "  build            Build agentmgr and agentmgr-helper"
 	@echo "  build-cli        Build agentmgr only"
 	@echo "  build-helper     Build agentmgr-helper only"
+	@echo "  build-macos-app  Build macOS .app bundle for helper (systray)"
 	@echo "  build-all        Build for all platforms"
 	@echo "  clean            Remove build artifacts"
 	@echo ""

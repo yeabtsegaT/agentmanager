@@ -223,12 +223,12 @@ func (s *unixServer) handleConnection(ctx context.Context, conn *connection) {
 					Code:    "handler_error",
 					Message: err.Error(),
 				})
-				conn.Send(errMsg)
+				_ = conn.Send(errMsg)
 				continue
 			}
 
 			if resp != nil {
-				conn.Send(resp)
+				_ = conn.Send(resp)
 			}
 		}
 	}
@@ -316,8 +316,9 @@ func (c *unixClient) Connect(ctx context.Context) error {
 	c.conn = newConnection(conn)
 	c.connected = true
 
-	// Start notification listener
-	go c.listenForNotifications(ctx)
+	// Note: We don't start listenForNotifications here because it conflicts
+	// with the synchronous Send/Receive pattern. If async notifications are
+	// needed, they should be handled separately.
 
 	return nil
 }

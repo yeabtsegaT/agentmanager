@@ -56,3 +56,8 @@ temp/
 
 # Claude Code local config
 .claude/
+
+# AgentManager specific
+AgentManager Helper.app/
+agentmgr
+agentmgr-helper

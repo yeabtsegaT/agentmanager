@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"fyne.io/systray"
+	"github.com/getlantern/systray"
 
 	"github.com/kevinelliott/agentmgr/pkg/agent"
 	"github.com/kevinelliott/agentmgr/pkg/api/rest"
@@ -22,6 +22,13 @@ import (
 	"github.com/kevinelliott/agentmgr/pkg/platform"
 	"github.com/kevinelliott/agentmgr/pkg/storage"
 )
+
+// agentMenuItem tracks a menu item for an agent.
+type agentMenuItem struct {
+	item    *systray.MenuItem
+	agentID string
+	method  agent.InstallMethod
+}
 
 // App represents the systray helper application.
 type App struct {
@@ -46,27 +53,20 @@ type App struct {
 	lastCheck   time.Time
 
 	// Menu items
-	mStatus    *systray.MenuItem
-	mAgents    *systray.MenuItem
-	mRefresh   *systray.MenuItem
-	mUpdateAll *systray.MenuItem
-	mOpenTUI   *systray.MenuItem
-	mAutoStart *systray.MenuItem
-	mQuit      *systray.MenuItem
-	agentItems []*agentMenuItem
+	mStatus     *systray.MenuItem
+	mAgentsMenu *systray.MenuItem
+	agentItems  []*agentMenuItem
+	agentItemsMu sync.Mutex
+	mRefresh    *systray.MenuItem
+	mUpdateAll  *systray.MenuItem
+	mOpenTUI    *systray.MenuItem
+	mAutoStart  *systray.MenuItem
+	mQuit       *systray.MenuItem
 
 	// Channels
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
-}
-
-// agentMenuItem represents a menu item for an agent.
-type agentMenuItem struct {
-	installation agent.Installation
-	menuItem     *systray.MenuItem
-	updateItem   *systray.MenuItem
-	infoItem     *systray.MenuItem
 }
 
 // New creates a new systray application.
@@ -87,6 +87,7 @@ func New(cfg *config.Config, plat platform.Platform, store storage.Store, det *d
 }
 
 // Run starts the systray application.
+// This must be called from the main goroutine on macOS.
 func (a *App) Run() error {
 	// Start IPC server
 	if err := a.startIPCServer(); err != nil {
@@ -101,8 +102,14 @@ func (a *App) Run() error {
 	}
 
 	// Run systray (blocks until quit)
+	// On macOS, this must run on the main thread
 	systray.Run(a.onReady, a.onExit)
 	return nil
+}
+
+// Quit triggers a graceful shutdown of the systray application.
+func (a *App) Quit() {
+	systray.Quit()
 }
 
 // startRESTServer starts the REST API server.
@@ -222,6 +229,7 @@ func (a *App) handleGetStatus(ctx context.Context, msg *ipc.Message) (*ipc.Messa
 
 	return ipc.NewMessage(ipc.MessageTypeSuccess, ipc.StatusResponse{
 		Running:            true,
+		PID:                os.Getpid(),
 		Uptime:             int64(time.Since(a.startTime).Seconds()),
 		AgentCount:         agentCount,
 		UpdatesAvailable:   updatesAvailable,
@@ -232,30 +240,31 @@ func (a *App) handleGetStatus(ctx context.Context, msg *ipc.Message) (*ipc.Messa
 
 // onReady is called when systray is ready.
 func (a *App) onReady() {
-	// Set icon and tooltip
-	systray.SetIcon(getIcon())
-	systray.SetTitle("AgentManager")
-	systray.SetTooltip("AgentManager - AI Agent Manager")
+	// Set icon and tooltip (no title - icon only)
+	icon := getIcon()
+	systray.SetTemplateIcon(icon, icon)
+	systray.SetTooltip("AgentManager")
 
-	// Create menu items
-	a.mStatus = systray.AddMenuItem("Loading...", "Status")
+	// Status line
+	a.mStatus = systray.AddMenuItem("Detecting agents...", "")
 	a.mStatus.Disable()
 
-	systray.AddSeparator()
+	// Agents submenu
+	a.mAgentsMenu = systray.AddMenuItem("Agents", "View detected agents")
+	a.mAgentsMenu.Disable() // Disabled until agents are detected
 
-	a.mAgents = systray.AddMenuItem("Agents", "Installed Agents")
-	a.mRefresh = systray.AddMenuItem("Refresh", "Re-detect agents")
-	a.mUpdateAll = systray.AddMenuItem("Update All", "Update all agents with available updates")
+	a.mUpdateAll = systray.AddMenuItem("No updates available", "")
 	a.mUpdateAll.Disable()
 
 	systray.AddSeparator()
 
-	a.mOpenTUI = systray.AddMenuItem("Open TUI", "Launch terminal interface")
-	a.mAutoStart = systray.AddMenuItem("Start at Login", "Toggle auto-start on login")
+	a.mOpenTUI = systray.AddMenuItem("Open AgentManager...", "Launch terminal interface")
+	a.mRefresh = systray.AddMenuItem("Refresh", "Re-detect agents")
 
 	systray.AddSeparator()
 
-	a.mQuit = systray.AddMenuItem("Quit", "Quit AgentManager Helper")
+	a.mAutoStart = systray.AddMenuItem("Start at Login", "Toggle auto-start on login")
+	a.mQuit = systray.AddMenuItem("Quit", "")
 
 	// Check auto-start status
 	if enabled, err := a.platform.IsAutoStartEnabled(a.ctx); err == nil && enabled {
@@ -339,8 +348,6 @@ func (a *App) backgroundLoop() {
 
 // refreshAgents refreshes the list of detected agents.
 func (a *App) refreshAgents(ctx context.Context) error {
-	a.mStatus.SetTitle("Refreshing...")
-
 	// Get agent definitions from catalog
 	agentDefs, err := a.catalog.GetAgentsForPlatform(ctx, string(a.platform.ID()))
 	if err != nil {
@@ -351,7 +358,6 @@ func (a *App) refreshAgents(ctx context.Context) error {
 	// Detect agents
 	detected, err := a.detector.DetectAll(ctx, agentDefs)
 	if err != nil {
-		a.mStatus.SetTitle("Error detecting agents")
 		return err
 	}
 
@@ -404,87 +410,280 @@ func (a *App) checkUpdates(ctx context.Context) error {
 // updateMenu updates the systray menu to reflect current state.
 func (a *App) updateMenu() {
 	a.agentsMu.RLock()
-	agentCount := len(a.agents)
+	agents := make([]agent.Installation, len(a.agents))
+	copy(agents, a.agents)
+	agentCount := len(agents)
 	updatesAvailable := 0
-	for _, ag := range a.agents {
+	for _, ag := range agents {
 		if ag.HasUpdate() {
 			updatesAvailable++
 		}
 	}
 	a.agentsMu.RUnlock()
 
-	// Update status
-	if updatesAvailable > 0 {
-		a.mStatus.SetTitle(fmt.Sprintf("%d agents (%d updates)", agentCount, updatesAvailable))
-		a.mUpdateAll.Enable()
-		systray.SetTooltip(fmt.Sprintf("AgentManager - %d updates available", updatesAvailable))
+	// Update status line
+	if agentCount == 0 {
+		a.mStatus.SetTitle("No agents detected")
+	} else if agentCount == 1 {
+		a.mStatus.SetTitle("1 agent detected")
 	} else {
-		a.mStatus.SetTitle(fmt.Sprintf("%d agents (up to date)", agentCount))
-		a.mUpdateAll.Disable()
-		systray.SetTooltip("AgentManager - All agents up to date")
+		a.mStatus.SetTitle(fmt.Sprintf("%d agents detected", agentCount))
 	}
 
-	// Update agent submenu
-	a.updateAgentSubmenu()
-}
+	// Update agents submenu
+	a.updateAgentsSubmenu(agents)
 
-// updateAgentSubmenu updates the agents submenu.
-func (a *App) updateAgentSubmenu() {
-	// Clear existing items
-	for _, item := range a.agentItems {
-		item.menuItem.Hide()
-		if item.updateItem != nil {
-			item.updateItem.Hide()
-		}
-		if item.infoItem != nil {
-			item.infoItem.Hide()
-		}
+	// Update Agents menu state
+	if agentCount > 0 {
+		a.mAgentsMenu.Enable()
+	} else {
+		a.mAgentsMenu.Disable()
 	}
-	a.agentItems = nil
 
-	a.agentsMu.RLock()
-	defer a.agentsMu.RUnlock()
-
-	// Add agent items
-	for _, ag := range a.agents {
-		var title string
-		if ag.HasUpdate() {
-			title = fmt.Sprintf("↑ %s (%s → %s)", ag.AgentName, ag.InstalledVersion.String(), ag.LatestVersion.String())
+	// Update updates line
+	if updatesAvailable > 0 {
+		if updatesAvailable == 1 {
+			a.mUpdateAll.SetTitle("⬆ 1 update available")
 		} else {
-			title = fmt.Sprintf("● %s (%s)", ag.AgentName, ag.InstalledVersion.String())
+			a.mUpdateAll.SetTitle(fmt.Sprintf("⬆ %d updates available", updatesAvailable))
 		}
-
-		item := a.mAgents.AddSubMenuItem(title, ag.Key())
-
-		agentItem := &agentMenuItem{
-			installation: ag,
-			menuItem:     item,
-		}
-
-		if ag.HasUpdate() {
-			agentItem.updateItem = item.AddSubMenuItem("Update", "Update this agent")
-			go a.handleAgentUpdate(agentItem)
-		}
-
-		agentItem.infoItem = item.AddSubMenuItem("Info", "Show agent info")
-		go a.handleAgentInfo(agentItem)
-
-		a.agentItems = append(a.agentItems, agentItem)
+		a.mUpdateAll.Enable()
+		systray.SetTooltip(fmt.Sprintf("AgentManager (%d updates)", updatesAvailable))
+	} else {
+		a.mUpdateAll.SetTitle("All agents up to date")
+		a.mUpdateAll.Disable()
+		systray.SetTooltip("AgentManager")
 	}
 }
 
-// handleAgentUpdate handles update clicks for an agent.
-func (a *App) handleAgentUpdate(item *agentMenuItem) {
-	if item.updateItem == nil {
-		return
+// updateAgentsSubmenu updates the agents submenu with current agents.
+func (a *App) updateAgentsSubmenu(agents []agent.Installation) {
+	a.agentItemsMu.Lock()
+	defer a.agentItemsMu.Unlock()
+
+	// Hide existing items that are no longer needed
+	for i, item := range a.agentItems {
+		if i >= len(agents) {
+			item.item.Hide()
+		}
 	}
+
+	// Create or update items for each agent
+	for i, ag := range agents {
+		// Build the menu item title
+		title := a.formatAgentMenuTitle(ag)
+
+		if i < len(a.agentItems) {
+			// Update existing item
+			a.agentItems[i].item.SetTitle(title)
+			a.agentItems[i].item.Show()
+			a.agentItems[i].agentID = ag.AgentID
+			a.agentItems[i].method = ag.Method
+		} else {
+			// Create new submenu item
+			item := a.mAgentsMenu.AddSubMenuItem(title, ag.AgentName)
+			menuItem := &agentMenuItem{
+				item:    item,
+				agentID: ag.AgentID,
+				method:  ag.Method,
+			}
+			a.agentItems = append(a.agentItems, menuItem)
+
+			// Start click handler for this item
+			go a.handleAgentItemClick(menuItem)
+		}
+	}
+}
+
+// formatAgentMenuTitle formats the menu title for an agent.
+func (a *App) formatAgentMenuTitle(ag agent.Installation) string {
+	version := ag.InstalledVersion.String()
+	if version == "" {
+		version = "unknown"
+	}
+
+	// Show method if there are multiple installations of same agent
+	methodSuffix := ""
+	if ag.Method != "" {
+		methodSuffix = fmt.Sprintf(" (%s)", ag.Method)
+	}
+
+	if ag.HasUpdate() {
+		return fmt.Sprintf("⬆ %s%s: %s → %s", ag.AgentName, methodSuffix, version, ag.LatestVersion.String())
+	}
+	return fmt.Sprintf("● %s%s: %s", ag.AgentName, methodSuffix, version)
+}
+
+// handleAgentItemClick handles clicks on an agent menu item.
+func (a *App) handleAgentItemClick(item *agentMenuItem) {
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
-		case <-item.updateItem.ClickedCh:
-			go a.updateSingleAgent(item.installation)
+		case <-item.item.ClickedCh:
+			// Find the current agent state
+			a.agentsMu.RLock()
+			var foundAgent *agent.Installation
+			for _, ag := range a.agents {
+				if ag.AgentID == item.agentID && ag.Method == item.method {
+					agCopy := ag
+					foundAgent = &agCopy
+					break
+				}
+			}
+			a.agentsMu.RUnlock()
+
+			if foundAgent != nil {
+				go a.showAgentDetails(*foundAgent)
+			}
 		}
+	}
+}
+
+// showAgentDetails shows a dialog with agent details and an optional update button.
+func (a *App) showAgentDetails(inst agent.Installation) {
+	// Build the details message
+	version := inst.InstalledVersion.String()
+	if version == "" {
+		version = "unknown"
+	}
+
+	details := fmt.Sprintf("Name: %s\nVersion: %s\nInstall Method: %s",
+		inst.AgentName, version, inst.Method)
+
+	if inst.ExecutablePath != "" {
+		details += fmt.Sprintf("\nPath: %s", inst.ExecutablePath)
+	}
+
+	if !inst.DetectedAt.IsZero() {
+		details += fmt.Sprintf("\nDetected: %s", inst.DetectedAt.Format("2006-01-02 15:04"))
+	}
+
+	hasUpdate := inst.HasUpdate()
+	if hasUpdate {
+		details += fmt.Sprintf("\n\nUpdate Available: %s → %s",
+			version, inst.LatestVersion.String())
+	}
+
+	// Show dialog based on platform
+	switch a.platform.ID() {
+	case platform.Darwin:
+		a.showMacOSAgentDialog(inst, details, hasUpdate)
+	case platform.Linux:
+		a.showLinuxAgentDialog(inst, details, hasUpdate)
+	case platform.Windows:
+		a.showWindowsAgentDialog(inst, details, hasUpdate)
+	default:
+		// Fallback: show notification
+		a.platform.ShowNotification(inst.AgentName, details)
+	}
+}
+
+// showMacOSAgentDialog shows an agent details dialog on macOS using osascript.
+func (a *App) showMacOSAgentDialog(inst agent.Installation, details string, hasUpdate bool) {
+	var script string
+	if hasUpdate {
+		// Dialog with Update and Close buttons
+		script = fmt.Sprintf(`
+tell application "System Events"
+	set dialogResult to display dialog %q with title %q buttons {"Close", "Update"} default button "Close" with icon note
+	if button returned of dialogResult is "Update" then
+		return "update"
+	end if
+end tell
+return "close"
+`, details, inst.AgentName)
+	} else {
+		// Dialog with only Close button
+		script = fmt.Sprintf(`
+tell application "System Events"
+	display dialog %q with title %q buttons {"Close"} default button "Close" with icon note
+end tell
+return "close"
+`, details, inst.AgentName)
+	}
+
+	cmd := exec.Command("osascript", "-e", script)
+	output, err := cmd.Output()
+	if err != nil {
+		// Dialog was cancelled or errored, ignore
+		return
+	}
+
+	result := string(output)
+	if hasUpdate && (result == "update\n" || result == "update") {
+		go a.updateSingleAgent(inst)
+	}
+}
+
+// showLinuxAgentDialog shows an agent details dialog on Linux using zenity or kdialog.
+func (a *App) showLinuxAgentDialog(inst agent.Installation, details string, hasUpdate bool) {
+	// Try zenity first
+	if _, err := exec.LookPath("zenity"); err == nil {
+		var cmd *exec.Cmd
+		if hasUpdate {
+			cmd = exec.Command("zenity", "--question",
+				"--title="+inst.AgentName,
+				"--text="+details+"\n\nDo you want to update?",
+				"--ok-label=Update",
+				"--cancel-label=Close")
+		} else {
+			cmd = exec.Command("zenity", "--info",
+				"--title="+inst.AgentName,
+				"--text="+details)
+		}
+		err := cmd.Run()
+		if hasUpdate && err == nil {
+			go a.updateSingleAgent(inst)
+		}
+		return
+	}
+
+	// Try kdialog
+	if _, err := exec.LookPath("kdialog"); err == nil {
+		if hasUpdate {
+			cmd := exec.Command("kdialog", "--yesno", details+"\n\nDo you want to update?", "--title", inst.AgentName)
+			err := cmd.Run()
+			if err == nil {
+				go a.updateSingleAgent(inst)
+			}
+		} else {
+			cmd := exec.Command("kdialog", "--msgbox", details, "--title", inst.AgentName)
+			_ = cmd.Run()
+		}
+		return
+	}
+
+	// Fallback to notification
+	a.platform.ShowNotification(inst.AgentName, details)
+}
+
+// showWindowsAgentDialog shows an agent details dialog on Windows using PowerShell.
+func (a *App) showWindowsAgentDialog(inst agent.Installation, details string, hasUpdate bool) {
+	var script string
+	if hasUpdate {
+		script = fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+$result = [System.Windows.Forms.MessageBox]::Show('%s', '%s', 'YesNo', 'Information')
+if ($result -eq 'Yes') { Write-Output 'update' } else { Write-Output 'close' }
+`, details+"\n\nDo you want to update?", inst.AgentName)
+	} else {
+		script = fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.MessageBox]::Show('%s', '%s', 'OK', 'Information')
+Write-Output 'close'
+`, details, inst.AgentName)
+	}
+
+	cmd := exec.Command("powershell", "-Command", script)
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	result := string(output)
+	if hasUpdate && (result == "update\r\n" || result == "update\n" || result == "update") {
+		go a.updateSingleAgent(inst)
 	}
 }
 
@@ -535,34 +734,6 @@ func (a *App) updateSingleAgent(inst agent.Installation) {
 
 	// Refresh agent list
 	a.refreshAgents(ctx)
-}
-
-// handleAgentInfo handles info clicks for an agent.
-func (a *App) handleAgentInfo(item *agentMenuItem) {
-	if item.infoItem == nil {
-		return
-	}
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-item.infoItem.ClickedCh:
-			info := fmt.Sprintf(
-				"Name: %s\nVersion: %s\nMethod: %s\nPath: %s",
-				item.installation.AgentName,
-				item.installation.InstalledVersion.String(),
-				item.installation.Method,
-				item.installation.ExecutablePath,
-			)
-			fromVer := item.installation.InstalledVersion.String()
-			toVer := ""
-			if item.installation.HasUpdate() {
-				toVer = item.installation.LatestVersion.String()
-				info += fmt.Sprintf("\n\nUpdate Available: %s", toVer)
-			}
-			a.platform.ShowChangelogDialog(item.installation.AgentName, fromVer, toVer, info)
-		}
-	}
 }
 
 // updateAllAgents updates all agents with available updates.
@@ -754,18 +925,17 @@ func (a *App) toggleAutoStart() {
 }
 
 // getIcon returns the systray icon.
+// 16x16 ring icon (template image for macOS menu bar).
 func getIcon() []byte {
-	// This would return an embedded icon
-	// For now, return a placeholder (1x1 transparent PNG)
 	return []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-		0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-		0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-		0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-		0x42, 0x60, 0x82,
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+		0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00,
+		0x2B, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x60, 0x18, 0xAC, 0xE0,
+		0x3F, 0x0E, 0x4C, 0xB6, 0x46, 0xA2, 0x0D, 0xA2, 0xC8, 0x80, 0xFF, 0x24,
+		0x62, 0x82, 0x06, 0x90, 0x2A, 0x3F, 0x1C, 0x0D, 0xA0, 0x69, 0x4C, 0xD0,
+		0x2E, 0x21, 0x51, 0x9C, 0x94, 0xE9, 0x0F, 0x00, 0xF4, 0x09, 0x6B, 0x95,
+		0x94, 0x7F, 0x2F, 0x72, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+		0xAE, 0x42, 0x60, 0x82,
 	}
 }
