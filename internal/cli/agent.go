@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -157,6 +158,11 @@ method, and update status.`,
 
 				filtered = append(filtered, inst)
 			}
+
+			// Sort agents alphabetically by name (case-insensitive)
+			sort.Slice(filtered, func(i, j int) bool {
+				return strings.ToLower(filtered[i].AgentName) < strings.ToLower(filtered[j].AgentName)
+			})
 
 			// Convert to list items
 			items := make([]AgentListItem, 0, len(filtered))
@@ -856,6 +862,7 @@ func outputAgentsTable(agents []AgentListItem, printer *output.Printer) error {
 
 	// Set headers
 	table.SetHeaders(
+		styles.FormatHeader("ID"),
 		styles.FormatHeader("AGENT"),
 		styles.FormatHeader("METHOD"),
 		styles.FormatHeader("VERSION"),
@@ -880,6 +887,7 @@ func outputAgentsTable(agents []AgentListItem, printer *output.Printer) error {
 		}
 
 		table.AddRow(
+			styles.Info.Render(agent.ID),
 			styles.FormatAgentName(agent.Name),
 			styles.FormatMethod(agent.Method),
 			styles.FormatVersion(agent.Version, agent.HasUpdate),

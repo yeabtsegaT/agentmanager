@@ -65,7 +65,7 @@ func main() {
 	inst := installer.NewManager(plat)
 
 	// Create systray app
-	app := systray.New(cfg, plat, store, det, cat, inst)
+	app := systray.New(cfg, loader, plat, store, det, cat, inst, version)
 
 	// Handle shutdown signals in a goroutine
 	// (systray.Run must be on main thread for macOS)

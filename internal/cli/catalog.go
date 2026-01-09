@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -113,6 +115,11 @@ by platform compatibility.`,
 					Methods:     methodNames,
 				})
 			}
+
+			// Sort agents alphabetically by name (case-insensitive)
+			sort.Slice(agents, func(i, j int) bool {
+				return strings.ToLower(agents[i].Name) < strings.ToLower(agents[j].Name)
+			})
 
 			if format == "json" {
 				return outputCatalogJSON(agents)
@@ -261,6 +268,11 @@ func newCatalogSearchCommand(cfg *config.Config) *cobra.Command {
 					Methods:     methodNames,
 				})
 			}
+
+			// Sort agents alphabetically by name (case-insensitive)
+			sort.Slice(agents, func(i, j int) bool {
+				return strings.ToLower(agents[i].Name) < strings.ToLower(agents[j].Name)
+			})
 
 			if format == "json" {
 				return outputCatalogJSON(agents)

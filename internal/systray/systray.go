@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,12 +34,14 @@ type agentMenuItem struct {
 
 // App represents the systray helper application.
 type App struct {
-	config    *config.Config
-	platform  platform.Platform
-	store     storage.Store
-	detector  *detector.Detector
-	catalog   *catalog.Manager
-	installer *installer.Manager
+	config       *config.Config
+	configLoader *config.Loader
+	platform     platform.Platform
+	store        storage.Store
+	detector     *detector.Detector
+	catalog      *catalog.Manager
+	installer    *installer.Manager
+	version      string
 
 	// IPC server
 	ipcServer ipc.Server
@@ -53,15 +57,22 @@ type App struct {
 	lastCheck   time.Time
 
 	// Menu items
-	mStatus     *systray.MenuItem
-	mAgentsMenu *systray.MenuItem
-	agentItems  []*agentMenuItem
-	agentItemsMu sync.Mutex
-	mRefresh    *systray.MenuItem
-	mUpdateAll  *systray.MenuItem
-	mOpenTUI    *systray.MenuItem
-	mAutoStart  *systray.MenuItem
-	mQuit       *systray.MenuItem
+	mStatus        *systray.MenuItem
+	mAgentsMenu    *systray.MenuItem
+	mManageAgents  *systray.MenuItem
+	mAgentsLoading *systray.MenuItem
+	agentItems     []*agentMenuItem
+	agentItemsMu   sync.Mutex
+	mRefresh      *systray.MenuItem
+	mUpdateAll    *systray.MenuItem
+	mOpenTUI      *systray.MenuItem
+	mSettings     *systray.MenuItem
+	mAutoStart    *systray.MenuItem
+	mQuit         *systray.MenuItem
+
+	// Track spawned dialog processes to kill on exit
+	dialogProcs   []*exec.Cmd
+	dialogProcsMu sync.Mutex
 
 	// Channels
 	ctx    context.Context
@@ -70,19 +81,21 @@ type App struct {
 }
 
 // New creates a new systray application.
-func New(cfg *config.Config, plat platform.Platform, store storage.Store, det *detector.Detector, cat *catalog.Manager, inst *installer.Manager) *App {
+func New(cfg *config.Config, cfgLoader *config.Loader, plat platform.Platform, store storage.Store, det *detector.Detector, cat *catalog.Manager, inst *installer.Manager, version string) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
-		config:    cfg,
-		platform:  plat,
-		store:     store,
-		detector:  det,
-		catalog:   cat,
-		installer: inst,
-		startTime: time.Now(),
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
+		config:       cfg,
+		configLoader: cfgLoader,
+		platform:     plat,
+		store:        store,
+		detector:     det,
+		catalog:      cat,
+		installer:    inst,
+		version:      version,
+		startTime:    time.Now(),
+		ctx:          ctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
 	}
 }
 
@@ -240,30 +253,38 @@ func (a *App) handleGetStatus(ctx context.Context, msg *ipc.Message) (*ipc.Messa
 
 // onReady is called when systray is ready.
 func (a *App) onReady() {
-	// Set icon and tooltip (no title - icon only)
+
+	// Set icon and tooltip
 	icon := getIcon()
 	systray.SetTemplateIcon(icon, icon)
 	systray.SetTooltip("AgentManager")
+	// Note: Not setting a title keeps it icon-only in menu bar
 
-	// Status line
-	a.mStatus = systray.AddMenuItem("Detecting agents...", "")
+	// Status line - use fixed text to avoid menu resizing
+	a.mStatus = systray.AddMenuItem("Loading...", "")
 	a.mStatus.Disable()
 
 	// Agents submenu
 	a.mAgentsMenu = systray.AddMenuItem("Agents", "View detected agents")
-	a.mAgentsMenu.Disable() // Disabled until agents are detected
+	a.mManageAgents = a.mAgentsMenu.AddSubMenuItem("Manage Agents", "Manage all agents")
+	separatorItem := a.mAgentsMenu.AddSubMenuItem("─────────────────────", "")
+	separatorItem.Disable() // Disable to make it non-clickable
+	// Loading item shown while agents are being detected
+	a.mAgentsLoading = a.mAgentsMenu.AddSubMenuItem("Loading...", "")
+	a.mAgentsLoading.Disable()
 
-	a.mUpdateAll = systray.AddMenuItem("No updates available", "")
+	a.mUpdateAll = systray.AddMenuItem("Updates", "")
 	a.mUpdateAll.Disable()
 
 	systray.AddSeparator()
 
-	a.mOpenTUI = systray.AddMenuItem("Open AgentManager...", "Launch terminal interface")
+	a.mOpenTUI = systray.AddMenuItem("Open TUI", "Launch terminal interface")
 	a.mRefresh = systray.AddMenuItem("Refresh", "Re-detect agents")
+	a.mAutoStart = systray.AddMenuItem("Start at Login", "Toggle auto-start on login")
 
 	systray.AddSeparator()
 
-	a.mAutoStart = systray.AddMenuItem("Start at Login", "Toggle auto-start on login")
+	a.mSettings = systray.AddMenuItem("Settings", "Configure AgentManager")
 	a.mQuit = systray.AddMenuItem("Quit", "")
 
 	// Check auto-start status
@@ -277,13 +298,20 @@ func (a *App) onReady() {
 	// Start background tasks
 	go a.backgroundLoop()
 
-	// Handle menu clicks
+	// Handle menu clicks (all menu items in one goroutine)
 	go a.handleMenuClicks()
+
 }
 
 // onExit is called when systray is exiting.
 func (a *App) onExit() {
 	a.cancel()
+
+	// Close all native windows
+	closeAllNativeWindows()
+
+	// Kill any open dialog processes (fallback osascript)
+	a.killAllDialogs()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -301,18 +329,56 @@ func (a *App) onExit() {
 	close(a.done)
 }
 
+// trackDialog adds a dialog process to be killed on exit.
+func (a *App) trackDialog(cmd *exec.Cmd) {
+	a.dialogProcsMu.Lock()
+	a.dialogProcs = append(a.dialogProcs, cmd)
+	a.dialogProcsMu.Unlock()
+}
+
+// untrackDialog removes a dialog process from tracking.
+func (a *App) untrackDialog(cmd *exec.Cmd) {
+	a.dialogProcsMu.Lock()
+	defer a.dialogProcsMu.Unlock()
+	for i, c := range a.dialogProcs {
+		if c == cmd {
+			a.dialogProcs = append(a.dialogProcs[:i], a.dialogProcs[i+1:]...)
+			return
+		}
+	}
+}
+
+// killAllDialogs kills all tracked dialog processes.
+func (a *App) killAllDialogs() {
+	a.dialogProcsMu.Lock()
+	procs := make([]*exec.Cmd, len(a.dialogProcs))
+	copy(procs, a.dialogProcs)
+	a.dialogProcs = nil
+	a.dialogProcsMu.Unlock()
+
+	for _, cmd := range procs {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+}
+
 // handleMenuClicks handles menu item clicks.
 func (a *App) handleMenuClicks() {
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
+		case <-a.mManageAgents.ClickedCh:
+			go a.showManageAgentsWindow()
 		case <-a.mRefresh.ClickedCh:
 			go a.refreshAgents(a.ctx)
 		case <-a.mUpdateAll.ClickedCh:
 			go a.updateAllAgents(a.ctx)
 		case <-a.mOpenTUI.ClickedCh:
 			go a.openTUI()
+		case <-a.mSettings.ClickedCh:
+			go a.showSettings()
 		case <-a.mAutoStart.ClickedCh:
 			go a.toggleAutoStart()
 		case <-a.mQuit.ClickedCh:
@@ -385,7 +451,8 @@ func (a *App) checkUpdates(ctx context.Context) error {
 	// In a real implementation, this would check the catalog for newer versions
 	// and update the LatestVersion field on each installation
 
-	a.updateMenu()
+	// Only update the counts, not the full menu (to avoid menu jumping)
+	a.updateMenuCounts()
 
 	// Show notification if updates available
 	a.agentsMu.RLock()
@@ -421,14 +488,8 @@ func (a *App) updateMenu() {
 	}
 	a.agentsMu.RUnlock()
 
-	// Update status line
-	if agentCount == 0 {
-		a.mStatus.SetTitle("No agents detected")
-	} else if agentCount == 1 {
-		a.mStatus.SetTitle("1 agent detected")
-	} else {
-		a.mStatus.SetTitle(fmt.Sprintf("%d agents detected", agentCount))
-	}
+	// Update status line (keep text short to minimize menu resizing)
+	a.mStatus.SetTitle(fmt.Sprintf("%d Agents", agentCount))
 
 	// Update agents submenu
 	a.updateAgentsSubmenu(agents)
@@ -440,17 +501,41 @@ func (a *App) updateMenu() {
 		a.mAgentsMenu.Disable()
 	}
 
-	// Update updates line
+	// Update updates line (keep text short to minimize menu resizing)
 	if updatesAvailable > 0 {
-		if updatesAvailable == 1 {
-			a.mUpdateAll.SetTitle("⬆ 1 update available")
-		} else {
-			a.mUpdateAll.SetTitle(fmt.Sprintf("⬆ %d updates available", updatesAvailable))
-		}
+		a.mUpdateAll.SetTitle(fmt.Sprintf("⬆ %d Updates", updatesAvailable))
 		a.mUpdateAll.Enable()
 		systray.SetTooltip(fmt.Sprintf("AgentManager (%d updates)", updatesAvailable))
 	} else {
-		a.mUpdateAll.SetTitle("All agents up to date")
+		a.mUpdateAll.SetTitle("Up to date")
+		a.mUpdateAll.Disable()
+		systray.SetTooltip("AgentManager")
+	}
+}
+
+// updateMenuCounts updates only the status and update counts without modifying the agents submenu.
+// This is used for background updates to avoid menu jumping.
+func (a *App) updateMenuCounts() {
+	a.agentsMu.RLock()
+	agentCount := len(a.agents)
+	updatesAvailable := 0
+	for _, ag := range a.agents {
+		if ag.HasUpdate() {
+			updatesAvailable++
+		}
+	}
+	a.agentsMu.RUnlock()
+
+	// Update status line (keep text short to minimize menu resizing)
+	a.mStatus.SetTitle(fmt.Sprintf("%d Agents", agentCount))
+
+	// Update updates line (keep text short to minimize menu resizing)
+	if updatesAvailable > 0 {
+		a.mUpdateAll.SetTitle(fmt.Sprintf("⬆ %d Updates", updatesAvailable))
+		a.mUpdateAll.Enable()
+		systray.SetTooltip(fmt.Sprintf("AgentManager (%d updates)", updatesAvailable))
+	} else {
+		a.mUpdateAll.SetTitle("Up to date")
 		a.mUpdateAll.Disable()
 		systray.SetTooltip("AgentManager")
 	}
@@ -460,6 +545,16 @@ func (a *App) updateMenu() {
 func (a *App) updateAgentsSubmenu(agents []agent.Installation) {
 	a.agentItemsMu.Lock()
 	defer a.agentItemsMu.Unlock()
+
+	// Hide loading indicator once agents are loaded
+	if a.mAgentsLoading != nil {
+		a.mAgentsLoading.Hide()
+	}
+
+	// Sort agents alphabetically by name (case-insensitive)
+	sort.Slice(agents, func(i, j int) bool {
+		return strings.ToLower(agents[i].AgentName) < strings.ToLower(agents[j].AgentName)
+	})
 
 	// Hide existing items that are no longer needed
 	for i, item := range a.agentItems {
@@ -480,8 +575,8 @@ func (a *App) updateAgentsSubmenu(agents []agent.Installation) {
 			a.agentItems[i].agentID = ag.AgentID
 			a.agentItems[i].method = ag.Method
 		} else {
-			// Create new submenu item
-			item := a.mAgentsMenu.AddSubMenuItem(title, ag.AgentName)
+			// Create new submenu item (no tooltip)
+			item := a.mAgentsMenu.AddSubMenuItem(title, "")
 			menuItem := &agentMenuItem{
 				item:    item,
 				agentID: ag.AgentID,
@@ -496,22 +591,26 @@ func (a *App) updateAgentsSubmenu(agents []agent.Installation) {
 }
 
 // formatAgentMenuTitle formats the menu title for an agent.
+// Format: "● Name (method) — version" with em-dash separator
+// Note: Tab-based right-alignment requires NSAttributedString with paragraph styles,
+// which isn't supported by getlantern/systray. Using em-dash separator for clean layout.
 func (a *App) formatAgentMenuTitle(ag agent.Installation) string {
 	version := ag.InstalledVersion.String()
 	if version == "" {
 		version = "unknown"
 	}
 
-	// Show method if there are multiple installations of same agent
-	methodSuffix := ""
+	// Method in lowercase parentheses
+	methodStr := ""
 	if ag.Method != "" {
-		methodSuffix = fmt.Sprintf(" (%s)", ag.Method)
+		methodStr = fmt.Sprintf(" (%s)", strings.ToLower(string(ag.Method)))
 	}
 
+	// Use em-dash separator for clean visual separation
 	if ag.HasUpdate() {
-		return fmt.Sprintf("⬆ %s%s: %s → %s", ag.AgentName, methodSuffix, version, ag.LatestVersion.String())
+		return fmt.Sprintf("⬆ %s%s — %s → %s", ag.AgentName, methodStr, version, ag.LatestVersion.String())
 	}
-	return fmt.Sprintf("● %s%s: %s", ag.AgentName, methodSuffix, version)
+	return fmt.Sprintf("● %s%s — %s", ag.AgentName, methodStr, version)
 }
 
 // handleAgentItemClick handles clicks on an agent menu item.
@@ -542,7 +641,13 @@ func (a *App) handleAgentItemClick(item *agentMenuItem) {
 
 // showAgentDetails shows a dialog with agent details and an optional update button.
 func (a *App) showAgentDetails(inst agent.Installation) {
-	// Build the details message
+	// Use native windows if available
+	if hasNativeWindowSupport() {
+		a.showNativeAgentDetailsWindow(inst)
+		return
+	}
+
+	// Build the details message for fallback dialogs
 	version := inst.InstalledVersion.String()
 	if version == "" {
 		version = "unknown"
@@ -922,6 +1027,390 @@ func (a *App) toggleAutoStart() {
 			a.mAutoStart.Check()
 		}
 	}
+}
+
+// showManageAgentsWindow displays the agent management window.
+func (a *App) showManageAgentsWindow() {
+	if hasNativeWindowSupport() {
+		// Get all agents from catalog for this platform
+		agentDefs, err := a.catalog.GetAgentsForPlatform(a.ctx, string(a.platform.ID()))
+		if err != nil {
+			a.platform.ShowNotification("Error", "Could not load agent catalog")
+			return
+		}
+
+		// Get currently installed agents
+		a.agentsMu.RLock()
+		installedAgents := make([]agent.Installation, len(a.agents))
+		copy(installedAgents, a.agents)
+		a.agentsMu.RUnlock()
+
+		a.showNativeManageAgentsWindow(agentDefs, installedAgents)
+		return
+	}
+
+	// Fallback to notification
+	a.platform.ShowNotification("Manage Agents", "Use the TUI for full agent management")
+}
+
+// showSettings displays the settings dialog.
+func (a *App) showSettings() {
+	// Use native windows if available
+	if hasNativeWindowSupport() {
+		a.showNativeSettingsWindow()
+		return
+	}
+
+	// Fall back to osascript/platform dialogs
+	switch a.platform.ID() {
+	case platform.Darwin:
+		a.showMacOSSettings()
+	case platform.Linux:
+		a.showLinuxSettings()
+	case platform.Windows:
+		a.showWindowsSettings()
+	default:
+		a.platform.ShowNotification("Settings", "Settings panel not available on this platform")
+	}
+}
+
+// showMacOSSettings shows the settings dialog on macOS using osascript.
+func (a *App) showMacOSSettings() {
+	// Find current CLI path
+	currentPath := a.config.Helper.CLIPath
+	if currentPath == "" {
+		if path, err := findAgentMgrBinary(); err == nil {
+			currentPath = path
+		} else {
+			currentPath = "(not found)"
+		}
+	}
+
+	notifyStatus := "ON"
+	if !a.config.Updates.Notify {
+		notifyStatus = "OFF"
+	}
+
+	// Use a simple button dialog instead of choose from list
+	// This doesn't require System Events accessibility permissions
+	script := fmt.Sprintf(`
+set theMessage to "AgentManager Settings
+
+CLI Path: %s
+
+Notifications: %s"
+
+display dialog theMessage with title "AgentManager Settings" buttons {"Install CLI", "Toggle Notifications", "Done"} default button "Done"
+return button returned of result
+`, escapeAppleScript(currentPath), notifyStatus)
+
+	for {
+		// Check if context is cancelled (helper is shutting down)
+		select {
+		case <-a.ctx.Done():
+			return
+		default:
+		}
+
+		cmd := exec.Command("osascript", "-e", script)
+		a.trackDialog(cmd)
+		output, err := cmd.CombinedOutput()
+		a.untrackDialog(cmd)
+
+		if err != nil {
+			// Dialog was cancelled, killed, or errored
+			return
+		}
+
+		result := strings.TrimSpace(string(output))
+		switch result {
+		case "Done":
+			return
+		case "Install CLI":
+			a.installOrUpdateCLI()
+			// Refresh path after potential installation
+			if path, err := findAgentMgrBinary(); err == nil {
+				currentPath = path
+			}
+		case "Toggle Notifications":
+			a.config.Updates.Notify = !a.config.Updates.Notify
+			if a.configLoader != nil {
+				_ = a.configLoader.SetAndSave("updates.notify", a.config.Updates.Notify)
+			}
+			notifyStatus = "ON"
+			if !a.config.Updates.Notify {
+				notifyStatus = "OFF"
+			}
+		}
+
+		// Regenerate script with updated values
+		script = fmt.Sprintf(`
+set theMessage to "AgentManager Settings
+
+CLI Path: %s
+
+Notifications: %s"
+
+display dialog theMessage with title "AgentManager Settings" buttons {"Install CLI", "Toggle Notifications", "Done"} default button "Done"
+return button returned of result
+`, escapeAppleScript(currentPath), notifyStatus)
+	}
+}
+
+// changeCLIPath prompts the user to change the CLI path.
+func (a *App) changeCLIPath() {
+	switch a.platform.ID() {
+	case platform.Darwin:
+		// Use osascript to show file chooser
+		script := `
+tell application "System Events"
+	set selectedFile to choose file with prompt "Select the agentmgr CLI binary:" of type {"public.unix-executable", "public.item"}
+	return POSIX path of selectedFile
+end tell
+`
+		cmd := exec.Command("osascript", "-e", script)
+		output, err := cmd.Output()
+		if err != nil {
+			return
+		}
+
+		newPath := strings.TrimSpace(string(output))
+		if newPath != "" {
+			a.config.Helper.CLIPath = newPath
+			if a.configLoader != nil {
+				_ = a.configLoader.SetAndSave("helper.cli_path", newPath)
+			}
+			a.platform.ShowNotification("Settings", fmt.Sprintf("CLI path set to: %s", newPath))
+		}
+	default:
+		a.platform.ShowNotification("Settings", "Use the config file to change CLI path")
+	}
+}
+
+// installOrUpdateCLI installs or updates the agentmgr CLI. Returns true on success.
+func (a *App) installOrUpdateCLI() bool {
+	// Find the bundled agentmgr binary (should be in same directory as helper)
+	bundledPath, err := findBundledAgentMgr()
+	if err != nil {
+		a.platform.ShowNotification("Install Failed", "Could not find bundled agentmgr binary")
+		return false
+	}
+
+	// Target path for installation
+	targetPath := "/usr/local/bin/agentmgr"
+
+	switch a.platform.ID() {
+	case platform.Darwin, platform.Linux:
+		// Copy with sudo (will prompt for password via macOS native dialog)
+		return a.installCLIToPath(bundledPath, targetPath)
+
+	case platform.Windows:
+		targetPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "agentmgr", "agentmgr.exe")
+		a.installCLIToPathWindows(bundledPath, targetPath)
+		return true // Windows version doesn't return status yet
+
+	default:
+		a.platform.ShowNotification("Install CLI", "Unsupported platform")
+		return false
+	}
+}
+
+// findBundledAgentMgr finds the agentmgr binary bundled with the helper.
+func findBundledAgentMgr() (string, error) {
+	// Get the path of the current executable (the helper)
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("could not get executable path: %w", err)
+	}
+
+	// Resolve any symlinks
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("could not resolve symlinks: %w", err)
+	}
+
+	dir := filepath.Dir(exe)
+
+	// Check for agentmgr in the same directory
+	agentmgrPath := filepath.Join(dir, "agentmgr")
+	if platform.IsWindows() {
+		agentmgrPath += ".exe"
+	}
+
+	if _, err := os.Stat(agentmgrPath); err == nil {
+		return agentmgrPath, nil
+	}
+
+	// On macOS, check inside the app bundle's MacOS directory
+	// Structure: AgentManager.app/Contents/MacOS/agentmgr-helper
+	// The agentmgr should also be in MacOS/
+	if strings.Contains(dir, ".app/Contents/MacOS") {
+		agentmgrPath = filepath.Join(dir, "agentmgr")
+		if _, err := os.Stat(agentmgrPath); err == nil {
+			return agentmgrPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("agentmgr binary not found in %s", dir)
+}
+
+// installCLIToPath installs the CLI binary to the target path using sudo.
+func (a *App) installCLIToPath(sourcePath, targetPath string) bool {
+	// Ensure target directory exists
+	targetDir := filepath.Dir(targetPath)
+
+	// Use osascript to run sudo with password prompt
+	script := fmt.Sprintf(`
+do shell script "mkdir -p '%s' && cp '%s' '%s' && chmod +x '%s'" with administrator privileges
+`, targetDir, sourcePath, targetPath, targetPath)
+
+	cmd := exec.Command("osascript", "-e", script)
+	err := cmd.Run()
+	if err != nil {
+		return false
+	}
+
+	// Update config with the new path
+	a.config.Helper.CLIPath = targetPath
+	if a.configLoader != nil {
+		_ = a.configLoader.SetAndSave("helper.cli_path", targetPath)
+	}
+	return true
+}
+
+// installCLIToPathWindows installs the CLI binary on Windows.
+func (a *App) installCLIToPathWindows(sourcePath, targetPath string) {
+	// Create target directory
+	targetDir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		a.platform.ShowNotification("Install Failed", fmt.Sprintf("Could not create directory: %v", err))
+		return
+	}
+
+	// Copy the file
+	sourceData, err := os.ReadFile(sourcePath)
+	if err != nil {
+		a.platform.ShowNotification("Install Failed", fmt.Sprintf("Could not read source: %v", err))
+		return
+	}
+
+	if err := os.WriteFile(targetPath, sourceData, 0755); err != nil {
+		a.platform.ShowNotification("Install Failed", fmt.Sprintf("Could not write target: %v", err))
+		return
+	}
+
+	a.platform.ShowNotification("Install Complete", fmt.Sprintf("agentmgr installed to %s\n\nAdd this to your PATH to use from command line.", targetPath))
+
+	// Update config
+	a.config.Helper.CLIPath = targetPath
+	if a.configLoader != nil {
+		_ = a.configLoader.SetAndSave("helper.cli_path", targetPath)
+	}
+}
+
+// uninstallCLI removes the CLI binary from the system path.
+func (a *App) uninstallCLI() bool {
+	targetPath := "/usr/local/bin/agentmgr"
+
+	switch a.platform.ID() {
+	case platform.Darwin, platform.Linux:
+		// Use osascript to run sudo with password prompt
+		script := fmt.Sprintf(`
+do shell script "rm -f '%s'" with administrator privileges
+`, targetPath)
+
+		cmd := exec.Command("osascript", "-e", script)
+		err := cmd.Run()
+		if err != nil {
+			return false
+		}
+
+		// Clear config path
+		a.config.Helper.CLIPath = ""
+		if a.configLoader != nil {
+			_ = a.configLoader.SetAndSave("helper.cli_path", "")
+		}
+		return true
+
+	case platform.Windows:
+		// Try to remove directly on Windows
+		targetPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "agentmgr", "agentmgr.exe")
+		if err := os.Remove(targetPath); err != nil {
+			return false
+		}
+
+		// Clear config path
+		a.config.Helper.CLIPath = ""
+		if a.configLoader != nil {
+			_ = a.configLoader.SetAndSave("helper.cli_path", "")
+		}
+		return true
+	}
+
+	return false
+}
+
+// showLinuxSettings shows the settings dialog on Linux.
+func (a *App) showLinuxSettings() {
+	// Try zenity first
+	if _, err := exec.LookPath("zenity"); err == nil {
+		currentPath := a.config.Helper.CLIPath
+		if currentPath == "" {
+			if path, err := findAgentMgrBinary(); err == nil {
+				currentPath = path
+			} else {
+				currentPath = "(not found)"
+			}
+		}
+
+		details := fmt.Sprintf("CLI Path: %s\nNotifications: %s\n\nEdit config file to change settings:\n%s",
+			currentPath, boolToOnOff(a.config.Updates.Notify), config.GetConfigPath())
+
+		cmd := exec.Command("zenity", "--info", "--title=AgentManager Settings", "--text="+details)
+		_ = cmd.Run()
+		return
+	}
+
+	// Fallback to notification
+	a.platform.ShowNotification("Settings", fmt.Sprintf("Edit config file: %s", config.GetConfigPath()))
+}
+
+// showWindowsSettings shows the settings dialog on Windows.
+func (a *App) showWindowsSettings() {
+	currentPath := a.config.Helper.CLIPath
+	if currentPath == "" {
+		if path, err := findAgentMgrBinary(); err == nil {
+			currentPath = path
+		} else {
+			currentPath = "(not found)"
+		}
+	}
+
+	details := fmt.Sprintf("CLI Path: %s\nNotifications: %s\n\nEdit config file to change settings:\n%s",
+		currentPath, boolToOnOff(a.config.Updates.Notify), config.GetConfigPath())
+
+	script := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.MessageBox]::Show('%s', 'AgentManager Settings', 'OK', 'Information')
+`, strings.ReplaceAll(details, "'", "''"))
+
+	cmd := exec.Command("powershell", "-Command", script)
+	_ = cmd.Run()
+}
+
+// escapeAppleScript escapes a string for use in AppleScript.
+func escapeAppleScript(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
+}
+
+// boolToOnOff converts a bool to "On" or "Off".
+func boolToOnOff(b bool) string {
+	if b {
+		return "On"
+	}
+	return "Off"
 }
 
 // getIcon returns the systray icon.

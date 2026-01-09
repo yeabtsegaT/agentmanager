@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -134,6 +136,31 @@ func NewUnixServer(socketPath string) Server {
 	}
 }
 
+// cleanupStaleSocket removes the socket file if it exists but no server is listening.
+// This handles cases where the server crashed or was forcefully killed.
+func (s *unixServer) cleanupStaleSocket() error {
+	// Check if socket file exists
+	if _, err := os.Stat(s.socketPath); os.IsNotExist(err) {
+		// Socket doesn't exist, nothing to clean up
+		return nil
+	}
+
+	// Try to connect to see if another server is actually running
+	conn, err := net.DialTimeout("unix", s.socketPath, 500*time.Millisecond)
+	if err == nil {
+		// Another server is running, close our test connection
+		conn.Close()
+		return errors.New("another server is already running on this socket")
+	}
+
+	// Connection failed, socket is stale - remove it
+	if err := os.Remove(s.socketPath); err != nil {
+		return fmt.Errorf("failed to remove stale socket: %w", err)
+	}
+
+	return nil
+}
+
 // Start begins listening for connections.
 func (s *unixServer) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -142,7 +169,12 @@ func (s *unixServer) Start(ctx context.Context) error {
 		return errors.New("server already running")
 	}
 
-	// Remove existing socket file
+	// Check for stale socket file and clean up if needed
+	if err := s.cleanupStaleSocket(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+
 	listener, err := net.Listen("unix", s.socketPath)
 	if err != nil {
 		s.mu.Unlock()

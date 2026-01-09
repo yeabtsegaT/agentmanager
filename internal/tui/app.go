@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -280,6 +281,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateList updates the list items from agents.
 func (m *Model) updateList() {
+	// Sort agents alphabetically by name (case-insensitive)
+	sort.Slice(m.agents, func(i, j int) bool {
+		return strings.ToLower(m.agents[i].AgentName) < strings.ToLower(m.agents[j].AgentName)
+	})
+
 	items := make([]list.Item, len(m.agents))
 	for i, a := range m.agents {
 		items[i] = agentItem{installation: a}
@@ -507,6 +513,11 @@ func (m Model) catalogView() string {
 		b.WriteString(styles.InfoMessage.Render("  No agents available for this platform.\n"))
 		return b.String()
 	}
+
+	// Sort agents alphabetically by name (case-insensitive)
+	sort.Slice(agents, func(i, j int) bool {
+		return strings.ToLower(agents[i].Name) < strings.ToLower(agents[j].Name)
+	})
 
 	// Build a simple table of agents
 	for _, agentDef := range agents {

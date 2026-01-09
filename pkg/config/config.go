@@ -19,6 +19,9 @@ type Config struct {
 	// API settings
 	API APIConfig `yaml:"api" json:"api" mapstructure:"api"`
 
+	// Helper/Systray settings
+	Helper HelperConfig `yaml:"helper" json:"helper" mapstructure:"helper"`
+
 	// Logging settings
 	Logging LoggingConfig `yaml:"logging" json:"logging" mapstructure:"logging"`
 
@@ -98,6 +101,21 @@ type APIConfig struct {
 	AuthToken string `yaml:"auth_token" json:"auth_token" mapstructure:"auth_token"`
 }
 
+// HelperConfig contains systray helper settings.
+type HelperConfig struct {
+	// CLIPath is the custom path to the agentmgr CLI binary
+	CLIPath string `yaml:"cli_path" json:"cli_path" mapstructure:"cli_path"`
+
+	// ShowAgentCount shows the agent count in the menu bar (macOS)
+	ShowAgentCount bool `yaml:"show_agent_count" json:"show_agent_count" mapstructure:"show_agent_count"`
+
+	// RefreshOnClick refreshes agents when clicking the systray icon
+	RefreshOnClick bool `yaml:"refresh_on_click" json:"refresh_on_click" mapstructure:"refresh_on_click"`
+
+	// NotifyOnStartup shows a notification when the helper starts
+	NotifyOnStartup bool `yaml:"notify_on_startup" json:"notify_on_startup" mapstructure:"notify_on_startup"`
+}
+
 // LoggingConfig contains logging settings.
 type LoggingConfig struct {
 	// Level is the log level (debug, info, warn, error)
@@ -164,6 +182,12 @@ func Default() *Config {
 			RESTPort:    8080,
 			RequireAuth: false,
 			AuthToken:   "",
+		},
+		Helper: HelperConfig{
+			CLIPath:         "", // Empty means auto-detect
+			ShowAgentCount:  false,
+			RefreshOnClick:  false,
+			NotifyOnStartup: false,
 		},
 		Logging: LoggingConfig{
 			Level:   "info",

@@ -94,6 +94,7 @@ func (l *Loader) Save(cfg *Config) error {
 	l.v.Set("updates", cfg.Updates)
 	l.v.Set("ui", cfg.UI)
 	l.v.Set("api", cfg.API)
+	l.v.Set("helper", cfg.Helper)
 	l.v.Set("logging", cfg.Logging)
 	l.v.Set("agents", cfg.Agents)
 
@@ -184,6 +185,12 @@ func (l *Loader) setDefaults() {
 	l.v.SetDefault("api.rest_port", defaults.API.RESTPort)
 	l.v.SetDefault("api.require_auth", defaults.API.RequireAuth)
 	l.v.SetDefault("api.auth_token", defaults.API.AuthToken)
+
+	// Helper defaults
+	l.v.SetDefault("helper.cli_path", defaults.Helper.CLIPath)
+	l.v.SetDefault("helper.show_agent_count", defaults.Helper.ShowAgentCount)
+	l.v.SetDefault("helper.refresh_on_click", defaults.Helper.RefreshOnClick)
+	l.v.SetDefault("helper.notify_on_startup", defaults.Helper.NotifyOnStartup)
 
 	// Logging defaults
 	l.v.SetDefault("logging.level", defaults.Logging.Level)
