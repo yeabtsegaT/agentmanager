@@ -1015,6 +1015,122 @@
         "vendor": "Nano Collective",
         "license": "MIT"
       }
+    },
+    "droid": {
+      "id": "droid",
+      "name": "Droid",
+      "description": "AI-powered software engineering agent by Factory for terminal-based development",
+      "homepage": "https://factory.ai/product/cli",
+      "repository": "https://github.com/Factory-AI/factory",
+      "documentation": "https://docs.factory.ai/cli/getting-started/overview",
+      "install_methods": {
+        "brew": {
+          "method": "brew",
+          "package": "droid",
+          "command": "brew install --cask droid",
+          "update_cmd": "brew upgrade --cask droid",
+          "uninstall_cmd": "brew uninstall --cask droid",
+          "platforms": ["darwin"],
+          "metadata": {
+            "cask": true,
+            "min_macos": "10.15"
+          }
+        },
+        "native": {
+          "method": "native",
+          "command": "curl -fsSL https://app.factory.ai/cli | sh",
+          "platforms": ["darwin", "linux"],
+          "prereqs": ["xdg-utils"],
+          "metadata": {
+            "installer_type": "shell_script",
+            "linux_prereqs": "xdg-utils"
+          }
+        },
+        "powershell": {
+          "method": "powershell",
+          "command": "irm https://app.factory.ai/cli/windows | iex",
+          "platforms": ["windows"],
+          "metadata": {
+            "installer_type": "powershell_script"
+          }
+        }
+      },
+      "detection": {
+        "executables": ["droid"],
+        "version_cmd": "droid --version",
+        "version_regex": "([\\d.]+)"
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/Factory-AI/factory/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "Factory AI",
+        "license": "Proprietary"
+      }
+    },
+    "codex": {
+      "id": "codex",
+      "name": "Codex",
+      "description": "Lightweight coding agent from OpenAI that runs in your terminal",
+      "homepage": "https://github.com/openai/codex",
+      "repository": "https://github.com/openai/codex",
+      "documentation": "https://github.com/openai/codex#readme",
+      "install_methods": {
+        "npm": {
+          "method": "npm",
+          "package": "@openai/codex",
+          "command": "npm install -g @openai/codex",
+          "update_cmd": "npm update -g @openai/codex",
+          "uninstall_cmd": "npm uninstall -g @openai/codex",
+          "platforms": ["darwin", "linux", "windows"],
+          "global_flag": "-g"
+        },
+        "brew": {
+          "method": "brew",
+          "package": "codex",
+          "command": "brew install --cask codex",
+          "update_cmd": "brew upgrade --cask codex",
+          "uninstall_cmd": "brew uninstall --cask codex",
+          "platforms": ["darwin"],
+          "metadata": {
+            "cask": true
+          }
+        },
+        "binary": {
+          "method": "binary",
+          "platforms": ["darwin", "linux"],
+          "metadata": {
+            "download_url": "https://github.com/openai/codex/releases/latest",
+            "artifacts": {
+              "darwin-arm64": "codex-aarch64-apple-darwin.tar.gz",
+              "darwin-amd64": "codex-x86_64-apple-darwin.tar.gz",
+              "linux-amd64": "codex-x86_64-unknown-linux-musl.tar.gz",
+              "linux-arm64": "codex-aarch64-unknown-linux-musl.tar.gz"
+            }
+          }
+        }
+      },
+      "detection": {
+        "executables": ["codex"],
+        "version_cmd": "codex --version",
+        "version_regex": "([\\d.]+)",
+        "signatures": {
+          "npm": {
+            "check_cmd": "npm list -g @openai/codex --json"
+          }
+        }
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/openai/codex/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "OpenAI",
+        "license": "Apache-2.0"
+      }
     }
   }
 }
