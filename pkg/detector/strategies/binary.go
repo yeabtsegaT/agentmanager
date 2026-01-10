@@ -37,11 +37,29 @@ func (s *BinaryStrategy) IsApplicable(p platform.Platform) bool {
 	return true // Binary detection works on all platforms
 }
 
+// binaryMethods are the install method names that represent binary/native installations.
+// The order matters - we check in this order and use the first one found in the catalog.
+var binaryMethods = []string{"native", "binary", "curl"}
+
 // Detect scans for installed agents and returns found installations.
 func (s *BinaryStrategy) Detect(ctx context.Context, agents []catalog.AgentDef) ([]*agent.Installation, error) {
 	var installations []*agent.Installation
 
 	for _, agentDef := range agents {
+		// Check if this agent has a binary-based install method defined in the catalog.
+		// This mirrors how NPMStrategy checks for "npm" before reporting.
+		var methodName string
+		for _, m := range binaryMethods {
+			if _, ok := agentDef.InstallMethods[m]; ok {
+				methodName = m
+				break
+			}
+		}
+		if methodName == "" {
+			// No binary-based install method defined for this agent, skip it
+			continue
+		}
+
 		for _, executable := range agentDef.Detection.Executables {
 			// Try to find the executable
 			path, err := s.platform.FindExecutable(executable)
@@ -55,7 +73,7 @@ func (s *BinaryStrategy) Detect(ctx context.Context, agents []catalog.AgentDef) 
 			inst := &agent.Installation{
 				AgentID:          agentDef.ID,
 				AgentName:        agentDef.Name,
-				Method:           agent.MethodNative,
+				Method:           agent.InstallMethod(methodName),
 				InstalledVersion: version,
 				ExecutablePath:   path,
 				Metadata: map[string]string{
