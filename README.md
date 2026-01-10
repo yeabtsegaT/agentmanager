@@ -1,5 +1,12 @@
 # AgentManager (agentmgr)
 
+[![CI](https://github.com/kevinelliott/agentmgr/actions/workflows/ci.yml/badge.svg)](https://github.com/kevinelliott/agentmgr/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kevinelliott/agentmgr)](https://github.com/kevinelliott/agentmgr/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/kevinelliott/agentmgr)](https://go.dev/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kevinelliott/agentmgr)](https://goreportcard.com/report/github.com/kevinelliott/agentmgr)
+[![Go Reference](https://pkg.go.dev/badge/github.com/kevinelliott/agentmgr.svg)](https://pkg.go.dev/github.com/kevinelliott/agentmgr)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 A comprehensive CLI/TUI/Library application for detecting, managing, installing, and updating AI development CLI agents across macOS, Linux, and Windows.
 
 ## Features
@@ -59,6 +66,61 @@ agentmgr tui
 # Disable colored output
 agentmgr --no-color agent list
 ```
+
+### Example Output
+
+```console
+$ agentmgr catalog list
+
+ID            NAME                    METHODS    DESCRIPTION
+------------  ----------------------  ---------  ----------------------------------------
+agent-deck    Agent Deck              brew +2    Terminal session manager for AI codin...
+aider         Aider                   pip +2     AI pair programming in your terminal
+amazon-q      Amazon Q Developer CLI  brew +1    Agentic chat experience in your termi...
+blackbox-cli  Blackbox CLI            npm +1     AI-powered CLI for natural language c...
+claude-code   Claude Code             npm +1     Anthropic's official CLI for Claude A...
+claude-squad  Claude Squad            brew +1    Terminal application for managing mul...
+continue-cli  Continue CLI            npm        Open-source AI code assistant CLI
+crush         Crush                   brew +2    Terminal-based AI coding agent from C...
+cursor-cli    Cursor CLI              native     Cursor AI editor CLI agent
+deepseek-cli  DeepSeek CLI            npm        Command-line AI coding assistant leve...
+gemini-cli    Gemini CLI              npm        Google's Gemini AI in your terminal
+copilot-cli   GitHub Copilot CLI      npm +1     GitHub Copilot in the command line
+kilocode-cli  Kilocode CLI            npm        Terminal UI for Kilo Code, the all-in...
+kubectl-ai    kubectl-ai              native +2  AI-powered Kubernetes Assistant that ...
+nanocoder     Nanocoder               npm +1     Community-driven local-first CLI codi...
+opencode      OpenCode                npm +2     The open source AI coding agent for y...
+openhands     OpenHands CLI           uv +3      AI-driven development CLI with termin...
+plandex       Plandex                 native     Open source AI coding agent for large...
+qoder-cli     Qoder CLI               binary     Qoder AI coding assistant CLI
+qwen-code     Qwen Code               npm +1     Open-source AI coding agent optimized...
+rallies-cli   Rallies CLI             pip +1     AI-powered investment research CLI wi...
+tokscale      Tokscale                bun +1     High-performance CLI for monitoring A...
+
+22 agents available
+```
+
+```console
+$ agentmgr agent list
+
+ID            AGENT               METHOD  VERSION              LATEST   STATUS
+------------  ------------------  ------  -------------------  -------  ------
+aider         Aider               pip     0.86.1               0.86.1   ●
+blackbox-cli  Blackbox CLI        npm     0.0.9                0.8.1    ⬆
+claude-code   Claude Code         npm     2.1.3                2.1.3    ●
+claude-squad  Claude Squad        native  1.0.13               -        ●
+continue-cli  Continue CLI        npm     1.5.29               1.5.29   ●
+crush         Crush               native  0.24.0               -        ●
+cursor-cli    Cursor CLI          native  2025.11.25           -        ●
+gemini-cli    Gemini CLI          native  0.15.1               -        ●
+copilot-cli   GitHub Copilot CLI  npm     0.0.340              0.0.377  ⬆
+opencode      OpenCode            npm     1.0.119              1.1.10   ⬆
+qoder-cli     Qoder CLI           native  0.1.15               -        ●
+qwen-code     Qwen Code           npm     0.2.3                0.6.1    ⬆
+tokscale      Tokscale            npm     1.0.22               1.0.22   ●
+```
+
+> **Legend:** ● = up to date, ⬆ = update available
 
 ## Commands
 
