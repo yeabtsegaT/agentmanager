@@ -64,7 +64,7 @@ func (p *NPMProvider) Install(ctx context.Context, agentDef catalog.AgentDef, me
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("npm install failed: %w\n%s", err, stderr.String())
+		return nil, fmt.Errorf("npm install failed: %w\n%s%s", err, stderr.String(), formatNPMPermissionHint(stderr.String()))
 	}
 
 	// Get installed version
@@ -105,7 +105,7 @@ func (p *NPMProvider) Update(ctx context.Context, inst *agent.Installation, agen
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("npm update failed: %w\n%s", err, stderr.String())
+		return nil, fmt.Errorf("npm update failed: %w\n%s%s", err, stderr.String(), formatNPMPermissionHint(stderr.String()))
 	}
 
 	// Get new version
@@ -139,7 +139,7 @@ func (p *NPMProvider) Uninstall(ctx context.Context, inst *agent.Installation, m
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("npm uninstall failed: %w\n%s", err, stderr.String())
+		return fmt.Errorf("npm uninstall failed: %w\n%s%s", err, stderr.String(), formatNPMPermissionHint(stderr.String()))
 	}
 
 	return nil
@@ -225,4 +225,23 @@ func extractNPMPackage(command string) string {
 		}
 	}
 	return ""
+}
+
+// formatNPMPermissionHint returns a helpful hint if the error is a permission issue.
+func formatNPMPermissionHint(stderr string) string {
+	if !strings.Contains(stderr, "EACCES") {
+		return ""
+	}
+
+	return `
+
+To fix npm global permission issues, configure npm to use a directory in your home folder:
+
+  mkdir -p ~/.npm-global
+  npm config set prefix '~/.npm-global'
+  echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+  source ~/.bashrc
+
+Then retry the installation. Alternatively, use a different install method (e.g., --method shell).
+`
 }
