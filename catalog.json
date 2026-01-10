@@ -1,7 +1,7 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "schema_version": 1,
-  "last_updated": "2026-01-09T00:00:00Z",
+  "last_updated": "2026-01-10T00:00:00Z",
   "agents": {
     "amp": {
       "id": "amp",
@@ -217,6 +217,72 @@
       "metadata": {
         "vendor": "GitHub",
         "license": "Proprietary"
+      }
+    },
+    "goose": {
+      "id": "goose",
+      "name": "Goose",
+      "description": "Open source AI agent that automates engineering tasks",
+      "homepage": "https://block.github.io/goose/",
+      "repository": "https://github.com/block/goose",
+      "documentation": "https://block.github.io/goose/docs/getting-started/installation/",
+      "install_methods": {
+        "native": {
+          "method": "native",
+          "command": "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
+          "update_cmd": "goose update",
+          "platforms": ["darwin", "linux"],
+          "metadata": {
+            "installer_type": "shell_script"
+          }
+        },
+        "brew": {
+          "method": "brew",
+          "package": "block-goose-cli",
+          "command": "brew install block-goose-cli",
+          "update_cmd": "brew upgrade block-goose-cli",
+          "uninstall_cmd": "brew uninstall block-goose-cli",
+          "platforms": ["darwin", "linux"]
+        },
+        "brew-cask": {
+          "method": "brew",
+          "package": "block-goose",
+          "command": "brew install --cask block-goose",
+          "update_cmd": "brew upgrade --cask block-goose",
+          "uninstall_cmd": "brew uninstall --cask block-goose",
+          "platforms": ["darwin"],
+          "metadata": {
+            "cask": "true",
+            "type": "desktop"
+          }
+        },
+        "powershell": {
+          "method": "powershell",
+          "command": "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/block/goose/main/download_cli.ps1' -OutFile 'download_cli.ps1'; .\\download_cli.ps1",
+          "platforms": ["windows"],
+          "metadata": {
+            "installer_type": "powershell_script"
+          }
+        }
+      },
+      "detection": {
+        "executables": ["goose"],
+        "version_cmd": "goose --version",
+        "version_regex": "([\\d.]+)",
+        "signatures": {
+          "brew": {
+            "check_cmd": "brew list block-goose-cli"
+          }
+        }
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/block/goose/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "Block Inc.",
+        "license": "Apache-2.0"
       }
     },
     "gemini-cli": {
