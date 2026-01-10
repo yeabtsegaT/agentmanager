@@ -195,6 +195,10 @@ After researching, indicate confidence for each finding:
     - Patch bump: `1.0.0` → `1.0.1`
     - Minor bump: `1.0.0` → `1.1.0`
 11. Also update the `"last_updated"` field to the current date
+12. **Use the `AskUserQuestion` tool** to ask about committing the changes:
+    - Question: "Commit the catalog.json changes?"
+    - Options: "Yes, commit" / "No, don't commit"
+13. If commit requested, create a git commit with a message like "Add <agent-name> to catalog"
 
 ## Using AskUserQuestion Tool
 
@@ -217,6 +221,15 @@ Options:
   - "Patch bump (x.x.X)" - Increment patch version for additions
   - "Minor bump (x.X.0)" - Increment minor version for significant changes
   - "No change" - Keep the current version
+```
+
+**For committing changes:**
+```
+Question: "Commit the catalog.json changes?"
+Header: "Commit"
+Options:
+  - "Yes, commit" - Create a git commit with the changes
+  - "No, don't commit" - Leave changes uncommitted
 ```
 
 ---
