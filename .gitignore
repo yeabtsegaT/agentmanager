@@ -54,9 +54,6 @@ __debug_bin
 tmp/
 temp/
 
-# Claude Code local config
-.claude/
-
 # AgentManager specific
 AgentManager Helper.app/
 agentmgr
