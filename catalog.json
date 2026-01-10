@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "schema_version": 1,
   "last_updated": "2026-01-09T00:00:00Z",
   "agents": {
@@ -665,6 +665,57 @@
       },
       "metadata": {
         "vendor": "Plandex",
+        "license": "MIT"
+      }
+    },
+    "pi-coding-agent": {
+      "id": "pi-coding-agent",
+      "name": "Pi Coding Agent",
+      "description": "Terminal-based coding agent with multi-model support and session branching",
+      "homepage": "https://github.com/badlogic/pi-mono",
+      "repository": "https://github.com/badlogic/pi-mono",
+      "documentation": "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+      "install_methods": {
+        "npm": {
+          "method": "npm",
+          "package": "@mariozechner/pi-coding-agent",
+          "command": "npm install -g @mariozechner/pi-coding-agent",
+          "update_cmd": "npm update -g @mariozechner/pi-coding-agent",
+          "uninstall_cmd": "npm uninstall -g @mariozechner/pi-coding-agent",
+          "platforms": ["darwin", "linux", "windows"],
+          "global_flag": "-g"
+        },
+        "binary": {
+          "method": "binary",
+          "platforms": ["darwin", "linux", "windows"],
+          "metadata": {
+            "download_url": "https://github.com/badlogic/pi-mono/releases",
+            "artifact_darwin_arm64": "pi-darwin-arm64.tar.gz",
+            "artifact_darwin_amd64": "pi-darwin-x64.tar.gz",
+            "artifact_linux_amd64": "pi-linux-x64.tar.gz",
+            "artifact_linux_arm64": "pi-linux-arm64.tar.gz",
+            "artifact_windows_amd64": "pi-windows-x64.zip",
+            "windows_note": "Requires bash shell (Git Bash, Cygwin, MSYS2, or WSL)"
+          }
+        }
+      },
+      "detection": {
+        "executables": ["pi"],
+        "version_cmd": "pi --version",
+        "version_regex": "([\\d.]+)",
+        "signatures": {
+          "npm": {
+            "check_cmd": "npm list -g @mariozechner/pi-coding-agent --json"
+          }
+        }
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/badlogic/pi-mono/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "Mario Zechner",
         "license": "MIT"
       }
     },
