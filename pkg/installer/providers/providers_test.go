@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/kevinelliott/agentmgr/pkg/agent"
@@ -110,6 +111,57 @@ func TestExtractNPMPackage(t *testing.T) {
 			result := extractNPMPackage(tt.command)
 			if result != tt.expected {
 				t.Errorf("extractNPMPackage(%q) = %q, want %q", tt.command, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatNPMPermissionHint(t *testing.T) {
+	tests := []struct {
+		name        string
+		stderr      string
+		expectHint  bool
+	}{
+		{
+			name:       "EACCES error",
+			stderr:     "npm ERR! code EACCES\nnpm ERR! syscall mkdir\nnpm ERR! path /usr/local/lib/node_modules",
+			expectHint: true,
+		},
+		{
+			name:       "EACCES in message",
+			stderr:     "Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules'",
+			expectHint: true,
+		},
+		{
+			name:       "No permission error",
+			stderr:     "npm ERR! code E404\nnpm ERR! 404 Not Found",
+			expectHint: false,
+		},
+		{
+			name:       "Empty stderr",
+			stderr:     "",
+			expectHint: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatNPMPermissionHint(tt.stderr)
+			hasHint := result != ""
+			if hasHint != tt.expectHint {
+				t.Errorf("formatNPMPermissionHint() returned hint=%v, want hint=%v", hasHint, tt.expectHint)
+			}
+			if tt.expectHint && result != "" {
+				// Verify the hint contains key instructions
+				if !strings.Contains(result, "npm config set prefix") {
+					t.Error("hint should contain npm config set prefix instruction")
+				}
+				if !strings.Contains(result, "~/.npm-global") {
+					t.Error("hint should mention ~/.npm-global directory")
+				}
+				if !strings.Contains(result, "--method shell") {
+					t.Error("hint should suggest alternative install method")
+				}
 			}
 		})
 	}
