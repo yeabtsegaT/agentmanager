@@ -1,5 +1,5 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "schema_version": 1,
   "last_updated": "2026-01-10T00:00:00Z",
   "agents": {
@@ -709,6 +709,45 @@
       "metadata": {
         "vendor": "Amazon Web Services",
         "license": "Apache-2.0 AND MIT"
+      }
+    },
+    "juno-code": {
+      "id": "juno-code",
+      "name": "Juno Code",
+      "description": "AI automation tool with Ralph Method for iterative code development",
+      "homepage": "https://github.com/askbudi/juno-code",
+      "repository": "https://github.com/askbudi/juno-code",
+      "documentation": "https://github.com/askbudi/juno-code#readme",
+      "install_methods": {
+        "npm": {
+          "method": "npm",
+          "package": "juno-code",
+          "command": "npm install -g juno-code",
+          "update_cmd": "npm update -g juno-code",
+          "uninstall_cmd": "npm uninstall -g juno-code",
+          "platforms": ["darwin", "linux", "windows"],
+          "global_flag": "-g",
+          "prereqs": ["node", "git"]
+        }
+      },
+      "detection": {
+        "executables": ["juno-code"],
+        "version_cmd": "juno-code --version",
+        "version_regex": "([\\d.]+)",
+        "signatures": {
+          "npm": {
+            "check_cmd": "npm list -g juno-code --json"
+          }
+        }
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/askbudi/juno-code/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "Juno AI INC.",
+        "license": "MIT"
       }
     },
     "kilocode-cli": {
