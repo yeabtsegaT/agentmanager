@@ -1,5 +1,5 @@
 {
-  "version": "1.0.8",
+  "version": "1.0.9",
   "schema_version": 1,
   "last_updated": "2026-01-10T00:00:00Z",
   "agents": {
@@ -116,6 +116,57 @@
       "metadata": {
         "vendor": "Anthropic",
         "license": "Proprietary"
+      }
+    },
+    "agent-cli": {
+      "id": "agent-cli",
+      "name": "Agent CLI",
+      "description": "Local-first AI-powered CLI with voice transcription and conversational agents",
+      "homepage": "https://github.com/basnijholt/agent-cli",
+      "repository": "https://github.com/basnijholt/agent-cli",
+      "documentation": "https://github.com/basnijholt/agent-cli#readme",
+      "install_methods": {
+        "uv": {
+          "method": "uv",
+          "package": "agent-cli",
+          "command": "uv tool install agent-cli",
+          "update_cmd": "uv tool upgrade agent-cli",
+          "uninstall_cmd": "uv tool uninstall agent-cli",
+          "platforms": ["darwin", "linux"],
+          "prereqs": ["uv", "python>=3.11"]
+        },
+        "pip": {
+          "method": "pip",
+          "package": "agent-cli",
+          "command": "pip install agent-cli",
+          "update_cmd": "pip install --upgrade agent-cli",
+          "uninstall_cmd": "pip uninstall agent-cli",
+          "platforms": ["darwin", "linux"],
+          "prereqs": ["python>=3.11"]
+        },
+        "pipx": {
+          "method": "pipx",
+          "package": "agent-cli",
+          "command": "pipx install agent-cli",
+          "update_cmd": "pipx upgrade agent-cli",
+          "uninstall_cmd": "pipx uninstall agent-cli",
+          "platforms": ["darwin", "linux"],
+          "prereqs": ["pipx", "python>=3.11"]
+        }
+      },
+      "detection": {
+        "executables": ["agent-cli", "agent", "ag"],
+        "version_cmd": "agent-cli --version",
+        "version_regex": "([\\d.]+)"
+      },
+      "changelog": {
+        "type": "github_releases",
+        "url": "https://api.github.com/repos/basnijholt/agent-cli/releases",
+        "file_format": "markdown"
+      },
+      "metadata": {
+        "vendor": "Bas Nijholt",
+        "license": "MIT"
       }
     },
     "aider": {
