@@ -171,7 +171,7 @@ type AgentConfig struct {
 func Default() *Config {
 	return &Config{
 		Catalog: CatalogConfig{
-			SourceURL:       "https://raw.githubusercontent.com/kevinelliott/agentmgr/main/catalog.json",
+			SourceURL:       "https://raw.githubusercontent.com/kevinelliott/agentmanager/main/catalog.json",
 			RefreshInterval: time.Hour,
 			RefreshOnStart:  true,
 			GitHubToken:     "",

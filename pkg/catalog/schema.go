@@ -204,8 +204,11 @@ func (c *Catalog) Validate() error {
 		if len(agent.InstallMethods) == 0 {
 			return fmt.Errorf("agent %s has no install methods", id)
 		}
-		if len(agent.Detection.Executables) == 0 {
-			return fmt.Errorf("agent %s has no executables defined", id)
+		// Agents must have either executables or signature-based detection (for git-cloned projects)
+		hasExecutables := len(agent.Detection.Executables) > 0
+		hasSignatures := len(agent.Detection.Signatures) > 0
+		if !hasExecutables && !hasSignatures {
+			return fmt.Errorf("agent %s has no executables or signatures defined", id)
 		}
 	}
 
