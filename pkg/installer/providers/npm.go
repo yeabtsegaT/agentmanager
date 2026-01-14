@@ -245,3 +245,19 @@ To fix npm global permission issues, configure npm to use a directory in your ho
 Then retry the installation. Alternatively, use a different install method (e.g., --method shell).
 `
 }
+
+// parseNPMListOutput parses npm list output to extract a package version.
+func parseNPMListOutput(output, packageName string) agent.Version {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, packageName+"@") {
+			parts := strings.Split(line, "@")
+			if len(parts) >= 2 {
+				versionStr := strings.TrimSpace(parts[len(parts)-1])
+				version, _ := agent.ParseVersion(versionStr)
+				return version
+			}
+		}
+	}
+	return agent.Version{}
+}

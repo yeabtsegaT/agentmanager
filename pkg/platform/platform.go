@@ -15,6 +15,12 @@ const (
 	Windows ID = "windows"
 )
 
+const (
+	windowsExeSuffix = ".exe"
+	envHome          = "HOME"
+	envUserProfile   = "USERPROFILE"
+)
+
 // Platform abstracts OS-specific operations.
 type Platform interface {
 	// Identity
@@ -105,7 +111,7 @@ func Supports(id ID) bool {
 // ExecutableExtension returns the executable file extension for the current platform.
 func ExecutableExtension() string {
 	if IsWindows() {
-		return ".exe"
+		return windowsExeSuffix
 	}
 	return ""
 }
@@ -121,9 +127,9 @@ func PathSeparator() string {
 // HomeDirEnv returns the environment variable name for the home directory.
 func HomeDirEnv() string {
 	if IsWindows() {
-		return "USERPROFILE"
+		return envUserProfile
 	}
-	return "HOME"
+	return envHome
 }
 
 // TempDir returns the temp directory for the current platform.

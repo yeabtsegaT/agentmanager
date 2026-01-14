@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kevinelliott/agentmgr/pkg/agent"
+	"github.com/kevinelliott/agentmgr/pkg/catalog"
 	"github.com/kevinelliott/agentmgr/pkg/platform"
 )
 
@@ -501,5 +502,755 @@ func TestPipProviderMethodFromManager(t *testing.T) {
 				t.Errorf("methodFromManager(%q) = %v, want %v", tt.manager, result, tt.expected)
 			}
 		})
+	}
+}
+
+// ========== NPM Version Parsing Tests ==========
+
+func TestParseNPMListOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		packageName string
+		wantMajor   int
+		wantMinor   int
+		wantPatch   int
+	}{
+		{
+			name: "standard npm list output",
+			output: `/usr/local/lib
+├── @anthropic-ai/claude-code@1.0.5
+└── npm@10.2.3`,
+			packageName: "@anthropic-ai/claude-code",
+			wantMajor:   1,
+			wantMinor:   0,
+			wantPatch:   5,
+		},
+		{
+			name:        "simple package",
+			output:      "├── typescript@5.3.2",
+			packageName: "typescript",
+			wantMajor:   5,
+			wantMinor:   3,
+			wantPatch:   2,
+		},
+		{
+			name:        "package not in output",
+			output:      "├── other-package@1.0.0",
+			packageName: "my-package",
+			wantMajor:   0,
+			wantMinor:   0,
+			wantPatch:   0,
+		},
+		{
+			name:        "empty output",
+			output:      "",
+			packageName: "package",
+			wantMajor:   0,
+			wantMinor:   0,
+			wantPatch:   0,
+		},
+		{
+			name:        "scoped package with beta version",
+			output:      "└── @scope/pkg@2.0.0-beta.1",
+			packageName: "@scope/pkg",
+			wantMajor:   2,
+			wantMinor:   0,
+			wantPatch:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version := parseNPMListOutput(tt.output, tt.packageName)
+			if version.Major != tt.wantMajor || version.Minor != tt.wantMinor || version.Patch != tt.wantPatch {
+				t.Errorf("parseNPMListOutput() = %d.%d.%d, want %d.%d.%d",
+					version.Major, version.Minor, version.Patch,
+					tt.wantMajor, tt.wantMinor, tt.wantPatch)
+			}
+		})
+	}
+}
+
+// ========== Brew JSON Parsing Tests ==========
+
+func TestParseBrewInfoJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		json      string
+		isCask    bool
+		wantMajor int
+		wantMinor int
+		wantPatch int
+	}{
+		{
+			name: "formula with installed version",
+			json: `{
+				"formulae": [{
+					"installed": [{"version": "2.45.1"}]
+				}],
+				"casks": []
+			}`,
+			isCask:    false,
+			wantMajor: 2,
+			wantMinor: 45,
+			wantPatch: 1,
+		},
+		{
+			name: "cask with installed version",
+			json: `{
+				"formulae": [],
+				"casks": [{"installed": "1.2.3"}]
+			}`,
+			isCask:    true,
+			wantMajor: 1,
+			wantMinor: 2,
+			wantPatch: 3,
+		},
+		{
+			name: "formula not installed",
+			json: `{
+				"formulae": [{
+					"installed": []
+				}],
+				"casks": []
+			}`,
+			isCask:    false,
+			wantMajor: 0,
+			wantMinor: 0,
+			wantPatch: 0,
+		},
+		{
+			name:      "empty json",
+			json:      `{}`,
+			isCask:    false,
+			wantMajor: 0,
+			wantMinor: 0,
+			wantPatch: 0,
+		},
+		{
+			name:      "invalid json",
+			json:      `not json`,
+			isCask:    false,
+			wantMajor: 0,
+			wantMinor: 0,
+			wantPatch: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version := parseBrewInfoJSON([]byte(tt.json), tt.isCask)
+			if version.Major != tt.wantMajor || version.Minor != tt.wantMinor || version.Patch != tt.wantPatch {
+				t.Errorf("parseBrewInfoJSON() = %d.%d.%d, want %d.%d.%d",
+					version.Major, version.Minor, version.Patch,
+					tt.wantMajor, tt.wantMinor, tt.wantPatch)
+			}
+		})
+	}
+}
+
+func TestParseBrewLatestVersionJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		json      string
+		isCask    bool
+		wantMajor int
+		wantMinor int
+		wantPatch int
+		wantErr   bool
+	}{
+		{
+			name: "formula stable version",
+			json: `{
+				"formulae": [{
+					"versions": {"stable": "3.14.0"}
+				}],
+				"casks": []
+			}`,
+			isCask:    false,
+			wantMajor: 3,
+			wantMinor: 14,
+			wantPatch: 0,
+		},
+		{
+			name: "cask version",
+			json: `{
+				"formulae": [],
+				"casks": [{"version": "4.5.6"}]
+			}`,
+			isCask:    true,
+			wantMajor: 4,
+			wantMinor: 5,
+			wantPatch: 6,
+		},
+		{
+			name: "no version found",
+			json: `{
+				"formulae": [],
+				"casks": []
+			}`,
+			isCask:  false,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version, err := parseBrewLatestVersionJSON([]byte(tt.json), tt.isCask)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if version.Major != tt.wantMajor || version.Minor != tt.wantMinor || version.Patch != tt.wantPatch {
+				t.Errorf("parseBrewLatestVersionJSON() = %d.%d.%d, want %d.%d.%d",
+					version.Major, version.Minor, version.Patch,
+					tt.wantMajor, tt.wantMinor, tt.wantPatch)
+			}
+		})
+	}
+}
+
+// ========== Pip Build Command Tests ==========
+
+func TestPipProviderBuildInstallCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      catalog.InstallMethodDef
+		force       bool
+		executables map[string]string
+		wantManager string
+		wantArgs    []string
+		wantPkg     string
+		wantErr     bool
+	}{
+		{
+			name: "pipx install",
+			method: catalog.InstallMethodDef{
+				Method:  "pipx",
+				Package: "aider-chat",
+			},
+			executables: map[string]string{"pipx": "/usr/bin/pipx"},
+			wantManager: "pipx",
+			wantArgs:    []string{"install", "aider-chat"},
+			wantPkg:     "aider-chat",
+		},
+		{
+			name: "pipx install with force",
+			method: catalog.InstallMethodDef{
+				Method:  "pipx",
+				Package: "aider-chat",
+			},
+			force:       true,
+			executables: map[string]string{"pipx": "/usr/bin/pipx"},
+			wantManager: "pipx",
+			wantArgs:    []string{"install", "--force", "aider-chat"},
+			wantPkg:     "aider-chat",
+		},
+		{
+			name: "uv tool install",
+			method: catalog.InstallMethodDef{
+				Method:  "uv",
+				Package: "ruff",
+			},
+			executables: map[string]string{"uv": "/usr/bin/uv"},
+			wantManager: "uv",
+			wantArgs:    []string{"tool", "install", "ruff"},
+			wantPkg:     "ruff",
+		},
+		{
+			name: "pip3 install",
+			method: catalog.InstallMethodDef{
+				Method:  "pip",
+				Package: "package",
+			},
+			executables: map[string]string{"pip3": "/usr/bin/pip3"},
+			wantManager: "pip3",
+			wantArgs:    []string{"install", "package"},
+			wantPkg:     "package",
+		},
+		{
+			name: "pip fallback when pip3 not available",
+			method: catalog.InstallMethodDef{
+				Method:  "pip",
+				Package: "package",
+			},
+			executables: map[string]string{"pip": "/usr/bin/pip"},
+			wantManager: "pip",
+			wantArgs:    []string{"install", "package"},
+			wantPkg:     "package",
+		},
+		{
+			name: "pipx not installed",
+			method: catalog.InstallMethodDef{
+				Method:  "pipx",
+				Package: "package",
+			},
+			executables: map[string]string{},
+			wantErr:     true,
+		},
+		{
+			name: "extract package from command",
+			method: catalog.InstallMethodDef{
+				Method:  "pip",
+				Command: "pip install mypackage",
+			},
+			executables: map[string]string{"pip3": "/usr/bin/pip3"},
+			wantManager: "pip3",
+			wantArgs:    []string{"install", "mypackage"},
+			wantPkg:     "mypackage",
+		},
+		{
+			name: "no package specified",
+			method: catalog.InstallMethodDef{
+				Method: "pip",
+			},
+			executables: map[string]string{"pip3": "/usr/bin/pip3"},
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plat := newMockPlatform()
+			plat.executables = tt.executables
+			provider := NewPipProvider(plat)
+
+			manager, args, pkg, err := provider.buildInstallCommand(tt.method, tt.force)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if manager != tt.wantManager {
+				t.Errorf("manager = %q, want %q", manager, tt.wantManager)
+			}
+			if pkg != tt.wantPkg {
+				t.Errorf("package = %q, want %q", pkg, tt.wantPkg)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Errorf("args = %v, want %v", args, tt.wantArgs)
+				return
+			}
+			for i, arg := range args {
+				if arg != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, arg, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPipProviderBuildUpdateCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      catalog.InstallMethodDef
+		executables map[string]string
+		wantManager string
+		wantArgs    []string
+		wantPkg     string
+		wantErr     bool
+	}{
+		{
+			name: "pipx upgrade",
+			method: catalog.InstallMethodDef{
+				Method:  "pipx",
+				Package: "aider-chat",
+			},
+			wantManager: "pipx",
+			wantArgs:    []string{"upgrade", "aider-chat"},
+			wantPkg:     "aider-chat",
+		},
+		{
+			name: "uv tool upgrade",
+			method: catalog.InstallMethodDef{
+				Method:  "uv",
+				Package: "ruff",
+			},
+			wantManager: "uv",
+			wantArgs:    []string{"tool", "upgrade", "ruff"},
+			wantPkg:     "ruff",
+		},
+		{
+			name: "pip install --upgrade",
+			method: catalog.InstallMethodDef{
+				Method:  "pip",
+				Package: "package",
+			},
+			executables: map[string]string{"pip3": "/usr/bin/pip3"},
+			wantManager: "pip3",
+			wantArgs:    []string{"install", "--upgrade", "package"},
+			wantPkg:     "package",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plat := newMockPlatform()
+			plat.executables = tt.executables
+			provider := NewPipProvider(plat)
+
+			manager, args, pkg, err := provider.buildUpdateCommand(tt.method)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if manager != tt.wantManager {
+				t.Errorf("manager = %q, want %q", manager, tt.wantManager)
+			}
+			if pkg != tt.wantPkg {
+				t.Errorf("package = %q, want %q", pkg, tt.wantPkg)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Errorf("args = %v, want %v", args, tt.wantArgs)
+				return
+			}
+			for i, arg := range args {
+				if arg != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, arg, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPipProviderBuildUninstallCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      catalog.InstallMethodDef
+		executables map[string]string
+		wantManager string
+		wantArgs    []string
+		wantPkg     string
+		wantErr     bool
+	}{
+		{
+			name: "pipx uninstall",
+			method: catalog.InstallMethodDef{
+				Method:  "pipx",
+				Package: "aider-chat",
+			},
+			wantManager: "pipx",
+			wantArgs:    []string{"uninstall", "aider-chat"},
+			wantPkg:     "aider-chat",
+		},
+		{
+			name: "uv tool uninstall",
+			method: catalog.InstallMethodDef{
+				Method:  "uv",
+				Package: "ruff",
+			},
+			wantManager: "uv",
+			wantArgs:    []string{"tool", "uninstall", "ruff"},
+			wantPkg:     "ruff",
+		},
+		{
+			name: "pip uninstall -y",
+			method: catalog.InstallMethodDef{
+				Method:  "pip",
+				Package: "package",
+			},
+			executables: map[string]string{"pip3": "/usr/bin/pip3"},
+			wantManager: "pip3",
+			wantArgs:    []string{"uninstall", "-y", "package"},
+			wantPkg:     "package",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plat := newMockPlatform()
+			plat.executables = tt.executables
+			provider := NewPipProvider(plat)
+
+			manager, args, pkg, err := provider.buildUninstallCommand(tt.method)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if manager != tt.wantManager {
+				t.Errorf("manager = %q, want %q", manager, tt.wantManager)
+			}
+			if pkg != tt.wantPkg {
+				t.Errorf("package = %q, want %q", pkg, tt.wantPkg)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Errorf("args = %v, want %v", args, tt.wantArgs)
+				return
+			}
+			for i, arg := range args {
+				if arg != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, arg, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+// ========== Brew parseBrewPackage Tests ==========
+
+func TestBrewProviderParseBrewPackage(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     catalog.InstallMethodDef
+		wantPkg    string
+		wantIsCask bool
+	}{
+		{
+			name: "package from Package field",
+			method: catalog.InstallMethodDef{
+				Package: "gh",
+			},
+			wantPkg:    "gh",
+			wantIsCask: false,
+		},
+		{
+			name: "cask from metadata",
+			method: catalog.InstallMethodDef{
+				Package:  "visual-studio-code",
+				Metadata: map[string]string{"type": "cask"},
+			},
+			wantPkg:    "visual-studio-code",
+			wantIsCask: true,
+		},
+		{
+			name: "extract from command",
+			method: catalog.InstallMethodDef{
+				Command: "brew install wget",
+			},
+			wantPkg:    "wget",
+			wantIsCask: false,
+		},
+		{
+			name: "extract cask from command",
+			method: catalog.InstallMethodDef{
+				Command: "brew install --cask firefox",
+			},
+			wantPkg:    "firefox",
+			wantIsCask: true,
+		},
+		{
+			name: "tap format",
+			method: catalog.InstallMethodDef{
+				Command: "brew install user/tap/myformula",
+			},
+			wantPkg:    "myformula",
+			wantIsCask: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plat := newMockPlatform()
+			provider := NewBrewProvider(plat)
+
+			pkg, isCask := provider.parseBrewPackage(tt.method)
+			if pkg != tt.wantPkg {
+				t.Errorf("package = %q, want %q", pkg, tt.wantPkg)
+			}
+			if isCask != tt.wantIsCask {
+				t.Errorf("isCask = %v, want %v", isCask, tt.wantIsCask)
+			}
+		})
+	}
+}
+
+// ========== Version String Extraction Edge Cases ==========
+
+func TestExtractVersionStringEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected string
+	}{
+		{"multiple versions picks first", "1.0.0\n2.0.0\n3.0.0", "1.0.0"},
+		{"version on second line", "Tool Name\n1.2.3\nCopyright", "1.2.3"},
+		{"version keyword with number", "Version 10.20.30 released", "10.20.30"},
+		{"Version with uppercase", "Version 5.6.7", "5.6.7"},
+		{"just version number", "3.2.1", "3.2.1"},
+		{"semver with patch", "1.2.3", "1.2.3"},
+		{"major minor only", "2.5", "2.5"},
+		{"space separated", "tool 1.0.0", "1.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractVersionString(tt.output)
+			if result != tt.expected {
+				t.Errorf("extractVersionString(%q) = %q, want %q", tt.output, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ========== Extract pip package edge cases ==========
+
+func TestExtractPipPackageEdgeCases(t *testing.T) {
+	tests := []struct {
+		command  string
+		expected string
+	}{
+		{"pip install package[extra]", "package[extra]"},
+		{"pip install ./local/path", "./local/path"},
+		{"pip install -e git+https://github.com/user/repo.git", "git+https://github.com/user/repo.git"},
+		{"pip install --user package", "package"},
+		{"pip install -r requirements.txt", "requirements.txt"},
+		{"uv pip install --system package", "package"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			result := extractPipPackage(tt.command)
+			if result != tt.expected {
+				t.Errorf("extractPipPackage(%q) = %q, want %q", tt.command, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ========== Extract NPM package edge cases ==========
+
+func TestExtractNPMPackageEdgeCases(t *testing.T) {
+	tests := []struct {
+		command  string
+		expected string
+	}{
+		{"npm install -g package@^1.0.0", "package"},
+		{"npm install -g package@~2.0.0", "package"},
+		{"npm i --global @org/pkg@latest", "@org/pkg"},
+		{"npm install -g --legacy-peer-deps package", "package"},
+		{"npm install -g package --registry https://registry.example.com", "package"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			result := extractNPMPackage(tt.command)
+			if result != tt.expected {
+				t.Errorf("extractNPMPackage(%q) = %q, want %q", tt.command, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ========== Extract Brew package edge cases ==========
+
+func TestExtractBrewPackageFromCommandEdgeCases(t *testing.T) {
+	tests := []struct {
+		command      string
+		expectedPkg  string
+		expectedCask bool
+	}{
+		{"brew install --quiet package", "package", false},
+		{"brew install --verbose formula", "formula", false},
+		{"brew cask install --force app", "app", true},
+		{"brew install user/tap/formula", "formula", false},
+		{"brew install homebrew/cask/vscode", "vscode", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			pkg, isCask := extractBrewPackageFromCommand(tt.command)
+			if pkg != tt.expectedPkg {
+				t.Errorf("package = %q, want %q", pkg, tt.expectedPkg)
+			}
+			if isCask != tt.expectedCask {
+				t.Errorf("isCask = %v, want %v", isCask, tt.expectedCask)
+			}
+		})
+	}
+}
+
+// ========== PyPI Version Parsing Tests ==========
+
+func TestParsePyPIVersionFromIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		wantMajor int
+		wantMinor int
+		wantPatch int
+	}{
+		{
+			name:      "standard format",
+			output:    "aider-chat (0.50.1)",
+			wantMajor: 0,
+			wantMinor: 50,
+			wantPatch: 1,
+		},
+		{
+			name:      "with extra whitespace",
+			output:    "  package  (1.2.3)  ",
+			wantMajor: 1,
+			wantMinor: 2,
+			wantPatch: 3,
+		},
+		{
+			name:      "no parentheses",
+			output:    "package 1.0.0",
+			wantMajor: 0,
+			wantMinor: 0,
+			wantPatch: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version := parsePyPIVersionFromIndex(tt.output)
+			if version.Major != tt.wantMajor || version.Minor != tt.wantMinor || version.Patch != tt.wantPatch {
+				t.Errorf("parsePyPIVersionFromIndex(%q) = %d.%d.%d, want %d.%d.%d",
+					tt.output,
+					version.Major, version.Minor, version.Patch,
+					tt.wantMajor, tt.wantMinor, tt.wantPatch)
+			}
+		})
+	}
+}
+
+// ========== Result Type Tests ==========
+
+func TestResultFields(t *testing.T) {
+	result := &Result{
+		AgentID:        "test-agent",
+		AgentName:      "Test Agent",
+		Method:         agent.MethodNPM,
+		Version:        agent.MustParseVersion("1.2.3"),
+		FromVersion:    agent.MustParseVersion("1.0.0"),
+		InstallPath:    "/usr/local/lib/node_modules/test",
+		ExecutablePath: "/usr/local/bin/test",
+		Output:         "install output",
+		WasUpdated:     true,
+	}
+
+	if result.AgentID != "test-agent" {
+		t.Errorf("AgentID = %q, want %q", result.AgentID, "test-agent")
+	}
+	if result.Version.Major != 1 || result.Version.Minor != 2 || result.Version.Patch != 3 {
+		t.Errorf("Version = %v, want 1.2.3", result.Version)
+	}
+	if !result.WasUpdated {
+		t.Error("WasUpdated should be true")
 	}
 }

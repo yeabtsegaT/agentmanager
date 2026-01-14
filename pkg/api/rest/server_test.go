@@ -87,7 +87,6 @@ func (m *mockStore) GetLastUpdateCheckTime(ctx context.Context) (time.Time, erro
 	return time.Time{}, nil
 }
 
-
 func createTestCatalog() *catalog.Catalog {
 	return &catalog.Catalog{
 		Version:       "1.0.0",

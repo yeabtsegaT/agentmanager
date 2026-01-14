@@ -432,3 +432,16 @@ func extractVersionFromPipOutput(output, packageName, manager string) string {
 
 	return ""
 }
+
+// parsePyPIVersionFromIndex parses version from pip/uv index versions output.
+func parsePyPIVersionFromIndex(output string) agent.Version {
+	outputStr := strings.TrimSpace(output)
+	if idx := strings.Index(outputStr, "("); idx > 0 {
+		if endIdx := strings.Index(outputStr, ")"); endIdx > idx {
+			versionStr := outputStr[idx+1 : endIdx]
+			version, _ := agent.ParseVersion(versionStr)
+			return version
+		}
+	}
+	return agent.Version{}
+}

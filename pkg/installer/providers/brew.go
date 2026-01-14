@@ -295,6 +295,10 @@ func extractBrewPackageFromCommand(command string) (string, bool) {
 			// Handle tap format: user/tap/package -> package
 			if strings.Contains(part, "/") {
 				segments := strings.Split(part, "/")
+				// Check if it's homebrew/cask/... format
+				if len(segments) >= 2 && segments[1] == "cask" {
+					isCask = true
+				}
 				return segments[len(segments)-1], isCask
 			}
 			return part, isCask
@@ -302,4 +306,68 @@ func extractBrewPackageFromCommand(command string) (string, bool) {
 	}
 
 	return "", isCask
+}
+
+// parseBrewInfoJSON parses brew info JSON output to extract installed version.
+func parseBrewInfoJSON(output []byte, isCask bool) agent.Version {
+	var result struct {
+		Formulae []struct {
+			Installed []struct {
+				Version string `json:"version"`
+			} `json:"installed"`
+		} `json:"formulae"`
+		Casks []struct {
+			Installed string `json:"installed"`
+		} `json:"casks"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return agent.Version{}
+	}
+
+	var versionStr string
+	if isCask && len(result.Casks) > 0 {
+		versionStr = result.Casks[0].Installed
+	} else if len(result.Formulae) > 0 && len(result.Formulae[0].Installed) > 0 {
+		versionStr = result.Formulae[0].Installed[0].Version
+	}
+
+	version, _ := agent.ParseVersion(versionStr)
+	return version
+}
+
+// parseBrewLatestVersionJSON parses brew info JSON output to extract latest version.
+func parseBrewLatestVersionJSON(output []byte, isCask bool) (agent.Version, error) {
+	var result struct {
+		Formulae []struct {
+			Versions struct {
+				Stable string `json:"stable"`
+			} `json:"versions"`
+		} `json:"formulae"`
+		Casks []struct {
+			Version string `json:"version"`
+		} `json:"casks"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return agent.Version{}, fmt.Errorf("failed to parse brew info: %w", err)
+	}
+
+	var versionStr string
+	if isCask && len(result.Casks) > 0 {
+		versionStr = result.Casks[0].Version
+	} else if len(result.Formulae) > 0 {
+		versionStr = result.Formulae[0].Versions.Stable
+	}
+
+	if versionStr == "" {
+		return agent.Version{}, fmt.Errorf("no version found")
+	}
+
+	version, err := agent.ParseVersion(versionStr)
+	if err != nil {
+		return agent.Version{}, err
+	}
+
+	return version, nil
 }

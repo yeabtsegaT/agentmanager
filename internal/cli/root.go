@@ -70,6 +70,7 @@ Examples:
 	root.AddCommand(
 		NewAgentCommand(cfg),
 		NewCatalogCommand(cfg),
+		NewCompletionCommand(),
 		NewConfigCommand(cfg),
 		NewHelperCommand(cfg),
 		NewTUICommand(cfg),
