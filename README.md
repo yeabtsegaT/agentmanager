@@ -175,6 +175,21 @@ agentmgr helper stop             # Stop systray helper
 agentmgr helper status           # Check helper status
 ```
 
+### System Health
+
+```bash
+agentmgr doctor                  # Check system health and configuration
+agentmgr doctor --verbose        # Show detailed output
+```
+
+### Self-Update
+
+```bash
+agentmgr upgrade                 # Check for and install updates
+agentmgr upgrade --check         # Check for updates only
+agentmgr upgrade --force         # Force reinstall
+```
+
 ### Global Options
 
 ```bash

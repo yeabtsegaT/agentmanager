@@ -72,8 +72,10 @@ Examples:
 		NewCatalogCommand(cfg),
 		NewCompletionCommand(),
 		NewConfigCommand(cfg),
+		NewDoctorCommand(cfg),
 		NewHelperCommand(cfg),
 		NewTUICommand(cfg),
+		NewUpgradeCommand(cfg, version),
 		NewVersionCommand(version, commit, date),
 	)
 

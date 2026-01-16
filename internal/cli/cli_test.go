@@ -58,7 +58,7 @@ func TestNewRootCommand(t *testing.T) {
 	}
 
 	// Check expected subcommands
-	expectedSubcommands := []string{"agent", "catalog", "completion", "config", "helper", "tui", "version"}
+	expectedSubcommands := []string{"agent", "catalog", "completion", "config", "doctor", "helper", "tui", "upgrade", "version"}
 	subCmds := cmd.Commands()
 	if len(subCmds) < len(expectedSubcommands) {
 		t.Errorf("Expected at least %d subcommands, got %d", len(expectedSubcommands), len(subCmds))
@@ -488,7 +488,7 @@ func TestRootCommandSubcommandCount(t *testing.T) {
 
 	// Verify we have exactly the expected number of subcommands
 	// This helps catch if subcommands are accidentally removed
-	expectedCount := 7 // agent, catalog, completion, config, helper, tui, version
+	expectedCount := 9 // agent, catalog, completion, config, doctor, helper, tui, upgrade, version
 	actualCount := len(cmd.Commands())
 
 	if actualCount != expectedCount {

@@ -96,6 +96,54 @@ jobs:
           name: agentmgr-${{ matrix.os }}
           path: bin/
 
+  integration:
+    name: Integration Tests
+    runs-on: ${{ matrix.os }}
+    needs: [build]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build binaries
+        run: |
+          go build -o bin/agentmgr ./cmd/agentmgr
+          chmod +x bin/agentmgr
+
+      - name: Test CLI version
+        run: ./bin/agentmgr version
+
+      - name: Test CLI help
+        run: ./bin/agentmgr --help
+
+      - name: Test doctor command
+        run: ./bin/agentmgr doctor || true
+
+      - name: Test catalog list
+        run: ./bin/agentmgr catalog list
+
+      - name: Test agent list (may be empty)
+        run: ./bin/agentmgr agent list || true
+
+      - name: Test completion generation
+        run: |
+          ./bin/agentmgr completion bash > /dev/null
+          ./bin/agentmgr completion zsh > /dev/null
+          ./bin/agentmgr completion fish > /dev/null
+
+      - name: Test config show
+        run: ./bin/agentmgr config show
+
+      - name: Test upgrade check
+        run: ./bin/agentmgr upgrade --check || true
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest
