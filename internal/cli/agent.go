@@ -433,6 +433,27 @@ Use --all to update all agents at once.`,
 				return fmt.Errorf("failed to load catalog: %w", err)
 			}
 
+			// Build agent lookup map for version checking
+			agentDefMap := make(map[string]catalog.AgentDef)
+			for _, def := range agentDefs {
+				agentDefMap[def.ID] = def
+			}
+
+			spinner.UpdateMessage("Checking for updates...")
+
+			// Check for latest versions so HasUpdate() works correctly
+			for _, installation := range installations {
+				if agentDef, ok := agentDefMap[installation.AgentID]; ok {
+					methodStr := string(installation.Method)
+					if method, ok := agentDef.InstallMethods[methodStr]; ok {
+						latestVer, err := inst.GetLatestVersion(ctx, method)
+						if err == nil {
+							installation.LatestVersion = &latestVer
+						}
+					}
+				}
+			}
+
 			spinner.Stop()
 
 			if all {
